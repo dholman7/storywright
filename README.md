@@ -64,6 +64,17 @@ Live runs on three Jira stories, each covering behavior none of the benchmark's 
 | An extraction can only be decided once (409) | passed first try | 7 | $0.0047 | fails: the second decision is accepted |
 | Upload type comes from the file extension (3 examples) | passed first try | 4 | $0.0025 | the mismatched-type example fails; the two valid ones still pass |
 
+**Publishing.** `storywright publish` turns a finished run into a pull request and a Jira update. It's a separate command with no model in it, so the agent that writes tests never holds the credentials that publish them:
+
+```bash
+storywright publish --repo ../vendor-intake-app --jira KAN-1          # prints the plan
+storywright publish --repo ../vendor-intake-app --jira KAN-1 --yes    # does it
+```
+
+- `passing`: commits only the generated test file to a new `storywright/<key>` branch, using a temporary worktree so your checkout is never touched. It then pushes the branch, opens a PR with `gh`, comments the PR link on the issue, and moves the issue to In Review (`--status`).
+- `app_defect`: comments the agent's diagnosis on the issue. No PR.
+- Anything else (`test_bug`, `environment`, a spent budget) is refused, and nothing is written.
+
 The agent hands over a test file only when it's green or when it documents a suspected app defect. It never hands over tests it couldn't get working.
 
 Failure handling, in order of how often it came up:
@@ -98,7 +109,7 @@ uv run aeg run --agent storywright --command "uv run --project ../storywright st
 ## Not in v1
 
 - Production code changes; Storywright writes tests only
-- Opening pull requests, and writing back to Jira (comments, status changes)
+- Running in GitHub Actions on a Jira webhook; `publish` is run by hand for now
 - Multiple trials on the `report` profile
 
 ## License

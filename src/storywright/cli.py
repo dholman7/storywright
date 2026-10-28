@@ -2,6 +2,7 @@
 
 storywright run --repo PATH --story FILE --task-id ID [--config FILE] [--out DIR]
 storywright run --repo PATH --jira KEY [--config FILE] [--out DIR]   # needs JIRA_* variables
+storywright publish --repo PATH --jira KEY [--out DIR] [--yes]       # PR + Jira comment
 storywright aeg [--config FILE]     # agent-eval-gate command contract (AEG_* variables)
 """
 
@@ -13,9 +14,10 @@ from pathlib import Path
 
 from storywright import graph as agent_graph
 from storywright import prompts
-from storywright.jira import JiraClient, JiraError
+from storywright.jira import JiraClient, JiraError, JiraWriter
 from storywright.llm import Claude
 from storywright.mcp_tools import McpTools, ServerSpec, connect
+from storywright.publish import Handover, PublishError, plan, publish
 from storywright.repo import RepoConfig, Verification, read_context, verify
 from storywright.tools import Toolbox
 
@@ -65,6 +67,7 @@ def solve(
     (out / "storywright-log.json").write_text(
         json.dumps(
             {
+                "task_id": task_id,
                 "verdict": final.get("verdict"),
                 "reason": final.get("reason"),
                 "tool_calls": llm.tool_calls,
@@ -106,10 +109,24 @@ def main(argv: list[str] | None = None) -> int:
             source.add_argument("--jira", metavar="KEY", help="read the story from a Jira issue")
             p.add_argument("--task-id", help="test tag; defaults to the Jira key")
             p.add_argument("--out", type=Path, default=Path("storywright-out"))
+    pub = sub.add_parser("publish", help="open a PR and update Jira from a finished run")
+    pub.add_argument(
+        "--repo", type=Path, required=True, help="git checkout whose origin gets the PR"
+    )
+    pub.add_argument("--jira", metavar="KEY", required=True)
+    pub.add_argument("--out", type=Path, default=Path("storywright-out"))
+    pub.add_argument("--base", default="main")
+    pub.add_argument("--status", default="In Review", help="Jira status after a PR is opened")
+    pub.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    pub.add_argument(
+        "--yes", action="store_true", help="perform the plan; without it, only print it"
+    )
     args = parser.parse_args(argv)
     if args.command == "run" and args.story and not args.task_id:
         parser.error("--task-id is required with --story")
     config = RepoConfig.load(args.config)
+    if args.command == "publish":
+        return _publish(args, config)
 
     if args.command == "aeg":
         task = json.loads(Path(os.environ["AEG_TASK"]).read_text())
@@ -147,6 +164,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {line}", file=sys.stderr)
     print(f"{task_id}: {final.get('verdict')}: {final.get('reason')}", file=sys.stderr)
     return 0 if final.get("verdict") in ("passing", "app_defect") else 1
+
+
+def _publish(args: argparse.Namespace, config: RepoConfig) -> int:
+    try:
+        jira = JiraWriter.from_env()
+        handover = Handover.load(args.out, args.jira)
+        the_plan = plan(handover, jira.story(args.jira).summary, config.test_dir, args.status)
+        print(the_plan.describe(args.base), file=sys.stderr)
+        if not args.yes:
+            print("dry run: pass --yes to do this", file=sys.stderr)
+            return 0
+        url = publish(args.repo, the_plan, args.base, jira)
+    except (JiraError, PublishError) as e:
+        print(f"storywright: {e}", file=sys.stderr)
+        return 2
+    print(url or f"commented on {args.jira}")
+    return 0
 
 
 if __name__ == "__main__":
