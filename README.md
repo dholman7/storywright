@@ -13,6 +13,8 @@ Scored by [agent-eval-gate](https://github.com/dholman7/agent-eval-gate) on its 
 
 The intervals are far apart: the loop is better than a single call by a wide, measurable margin. The whole held-out run cost $0.17. On the 12 dev tasks, v0.2 succeeded on all 36 trials.
 
+On the `report` profile (Claude Opus 5.5, medium effort, 1 trial per task), v0.2 succeeded on all 20 held-out tasks and caught all 24 seeded bugs, with no test file failing on correct code. That run cost $0.091 per task, $1.81 in total. Haiku gets within a few points of that for about 3% of the cost, so the cheap profile is the default.
+
 **A note on fairness.** The prompts were tuned on the dev split. v0.1 was then scored once on held-out (19/20 tasks, 1 trial). v0.2 added the repo tools after that score was seen, to fix a failure it exposed, so v0.2's held-out numbers come from fresh trials but aren't a blind result.
 
 ### What still goes wrong
@@ -75,7 +77,7 @@ uv run aeg run --agent storywright --command "uv run --project ../storywright st
 
 - Production code changes; Storywright writes tests only
 - Jira input and opening pull requests; stories come from files for now
-- An Opus `report` run on the held-out split
+- Multiple trials on the `report` profile
 
 ## License
 
