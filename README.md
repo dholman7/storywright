@@ -42,6 +42,14 @@ write ──> verify ──green──> passing
 
 **Repo tools** (`list_files`, `read_file`, `search`) are read-only and confined to the repo. They never touch dependencies, caches, `.git`, or runtime data, and paths that escape the repo are refused. Each model call may make up to 12 tool calls. Past that, every call returns an error asking for an answer, and a model that still keeps calling tools ends the run. v0.2 averaged 3.1 tool calls per trial.
 
+**MCP tools.** Any MCP server can be attached over stdio with `--mcp-server NAME=COMMAND`, and its tools are offered next to the repo tools as `mcp__NAME__tool`. A server receives only the environment variables named with `--mcp-env`, plus the SDK's safe defaults like `PATH`. A CI server can get a GitHub token without ever seeing the Anthropic key. For example, attaching [ci-context-mcp](https://github.com/dholman7/ci-context-mcp) lets the agent read failed CI runs:
+
+```bash
+storywright run --repo ../app --story story.feature --task-id VEN-01 \
+  --mcp-server "ci=uv run --project ../ci-context-mcp ci-context-mcp" \
+  --mcp-env GITHUB_TOKEN --mcp-env CI_CONTEXT_REPOS
+```
+
 The agent hands over a test file only when it's green or when it documents a suspected app defect. It never hands over tests it couldn't get working.
 
 Failure handling, in order of how often it came up:

@@ -13,6 +13,7 @@ from pathlib import Path
 from storywright import graph as agent_graph
 from storywright import prompts
 from storywright.llm import Claude
+from storywright.mcp_tools import McpTools, ServerSpec, connect
 from storywright.repo import RepoConfig, Verification, read_context, verify
 from storywright.tools import Toolbox
 
@@ -29,8 +30,9 @@ def solve(
     *,
     max_repairs: int,
     budget_usd: float,
+    mcp: McpTools | None = None,
 ) -> agent_graph.State:
-    llm = Claude(toolbox=Toolbox(repo))
+    llm = Claude(toolbox=Toolbox(repo), mcp=mcp)
 
     def verifier(task: str, code: str) -> Verification:
         path = agent_graph.test_path(repo, config.test_dir, task)
@@ -81,6 +83,20 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
         p.add_argument("--max-repairs", type=int, default=3)
         p.add_argument("--budget-usd", type=float, default=1.00)
+        p.add_argument(
+            "--mcp-server",
+            action="append",
+            default=[],
+            metavar="NAME=COMMAND",
+            help="attach an MCP server over stdio (repeatable)",
+        )
+        p.add_argument(
+            "--mcp-env",
+            action="append",
+            default=[],
+            metavar="VAR",
+            help="environment variable to pass to MCP servers; nothing else is passed",
+        )
         if name == "run":
             p.add_argument("--repo", type=Path, required=True)
             p.add_argument("--story", type=Path, required=True, help="file with the scenario text")
@@ -97,16 +113,19 @@ def main(argv: list[str] | None = None) -> int:
         repo, out, task_id = args.repo, args.out, args.task_id
         story, tag = args.story.read_text(), f"@{args.task_id}"
 
-    final = solve(
-        repo,
-        config,
-        task_id,
-        story,
-        tag,
-        out,
-        max_repairs=args.max_repairs,
-        budget_usd=args.budget_usd,
-    )
+    specs = [ServerSpec.parse(s, args.mcp_env) for s in args.mcp_server]
+    with connect(specs) as mcp:
+        final = solve(
+            repo,
+            config,
+            task_id,
+            story,
+            tag,
+            out,
+            max_repairs=args.max_repairs,
+            budget_usd=args.budget_usd,
+            mcp=mcp,
+        )
     for line in final.get("log", []):
         print(f"  {line}", file=sys.stderr)
     print(f"{task_id}: {final.get('verdict')}: {final.get('reason')}", file=sys.stderr)

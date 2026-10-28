@@ -3,10 +3,13 @@
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from storywright.tools import DEFINITIONS as TOOL_DEFINITIONS
 from storywright.tools import Toolbox, ToolError
+
+if TYPE_CHECKING:
+    from storywright.mcp_tools import McpTools
 
 # (model, effort) per profile. `dev` is the default so routine runs stay cheap; publish numbers
 # from `report`. STORYWRIGHT_MODEL and STORYWRIGHT_EFFORT override either part.
@@ -75,7 +78,11 @@ def resolve() -> tuple[str, str]:
 
 class Claude:
     def __init__(
-        self, client: Any | None = None, toolbox: Toolbox | None = None, max_tool_calls: int = 12
+        self,
+        client: Any | None = None,
+        toolbox: Toolbox | None = None,
+        max_tool_calls: int = 12,
+        mcp: "McpTools | None" = None,
     ) -> None:
         import anthropic
 
@@ -83,8 +90,20 @@ class Claude:
         self.model, self.effort = resolve()
         self.spend = Spend()
         self.toolbox = toolbox
+        self.mcp = mcp
         self.max_tool_calls = max_tool_calls
         self.tool_calls = 0
+
+    def _definitions(self) -> list[dict[str, Any]]:
+        repo = TOOL_DEFINITIONS if self.toolbox is not None else []
+        return [*repo, *(self.mcp.definitions if self.mcp is not None else [])]
+
+    def _run_tool(self, name: str, arguments: dict[str, Any]) -> str:
+        if self.mcp is not None and self.mcp.handles(name):
+            return self.mcp.run(name, arguments)
+        if self.toolbox is None:
+            raise ToolError(f"unknown tool {name!r}")
+        return self.toolbox.run(name, arguments)
 
     def _create(self, params: dict[str, Any]) -> Any:
         import anthropic
@@ -104,7 +123,7 @@ class Claude:
         for block in response.content:
             if block.type != "tool_use":
                 continue
-            if self.toolbox is None:
+            if not self._definitions():
                 raise LLMError(f"model called {block.name!r} but no tools were offered")
             if budget <= 0:
                 content, is_error = "Tool budget used up. Answer now with what you have.", True
@@ -112,7 +131,7 @@ class Claude:
                 budget -= 1
                 self.tool_calls += 1
                 try:
-                    content, is_error = self.toolbox.run(block.name, dict(block.input)), False
+                    content, is_error = self._run_tool(block.name, dict(block.input)), False
                 except ToolError as exc:
                     content, is_error = f"Error: {exc}", True
             results.append(
@@ -143,8 +162,8 @@ class Claude:
                 "format": {"type": "json_schema", "schema": schema},
             },
         }
-        if self.toolbox is not None:
-            params["tools"] = TOOL_DEFINITIONS
+        if self._definitions():
+            params["tools"] = self._definitions()
         if self.model in FALLBACK_MODELS:
             params |= {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
 
