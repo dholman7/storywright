@@ -1,6 +1,7 @@
 """`storywright` command line.
 
 storywright run --repo PATH --story FILE --task-id ID [--config FILE] [--out DIR]
+storywright run --repo PATH --jira KEY [--config FILE] [--out DIR]   # needs JIRA_* variables
 storywright aeg [--config FILE]     # agent-eval-gate command contract (AEG_* variables)
 """
 
@@ -12,6 +13,7 @@ from pathlib import Path
 
 from storywright import graph as agent_graph
 from storywright import prompts
+from storywright.jira import JiraClient, JiraError
 from storywright.llm import Claude
 from storywright.mcp_tools import McpTools, ServerSpec, connect
 from storywright.repo import RepoConfig, Verification, read_context, verify
@@ -99,10 +101,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         if name == "run":
             p.add_argument("--repo", type=Path, required=True)
-            p.add_argument("--story", type=Path, required=True, help="file with the scenario text")
-            p.add_argument("--task-id", required=True)
+            source = p.add_mutually_exclusive_group(required=True)
+            source.add_argument("--story", type=Path, help="file with the scenario text")
+            source.add_argument("--jira", metavar="KEY", help="read the story from a Jira issue")
+            p.add_argument("--task-id", help="test tag; defaults to the Jira key")
             p.add_argument("--out", type=Path, default=Path("storywright-out"))
     args = parser.parse_args(argv)
+    if args.command == "run" and args.story and not args.task_id:
+        parser.error("--task-id is required with --story")
     config = RepoConfig.load(args.config)
 
     if args.command == "aeg":
@@ -110,8 +116,19 @@ def main(argv: list[str] | None = None) -> int:
         repo, out = Path(os.environ["AEG_WORKSPACE"]), Path(os.environ["AEG_OUTPUT"])
         task_id, story, tag = task["task_id"], task["story"], task["required_tag"]
     else:
-        repo, out, task_id = args.repo, args.out, args.task_id
-        story, tag = args.story.read_text(), f"@{args.task_id}"
+        repo, out = args.repo, args.out
+        if args.jira:
+            try:
+                issue = JiraClient.from_env().story(args.jira)
+            except JiraError as e:
+                print(f"storywright: {e}", file=sys.stderr)
+                return 2
+            story, task_id = issue.text, args.task_id or issue.key
+            if not issue.gherkin:
+                print(f"  {issue.key} has no Gherkin block; using its description", file=sys.stderr)
+        else:
+            story, task_id = args.story.read_text(), args.task_id
+        tag = f"@{task_id}"
 
     specs = [ServerSpec.parse(s, args.mcp_env) for s in args.mcp_server]
     with connect(specs) as mcp:

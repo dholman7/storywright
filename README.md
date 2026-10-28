@@ -50,6 +50,14 @@ storywright run --repo ../app --story story.feature --task-id VEN-01 \
   --mcp-env GITHUB_TOKEN --mcp-env CI_CONTEXT_REPOS
 ```
 
+**Jira stories.** `--jira KEY` reads the story from a Jira Cloud issue instead of a file. The issue key becomes the test tag. A `gherkin` code block in the description is used as the scenario; with none, Storywright falls back to the summary and description prose. The client only issues GETs, refuses anything that isn't an issue key before making a request, and reports 401/403/404 as plain messages without credentials. It reads `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_TOKEN` (an Atlassian API token):
+
+```bash
+storywright run --repo ../vendor-intake-app --jira KAN-1
+```
+
+The first live run was on a story whose behavior none of the benchmark's scenarios test (members can't record review decisions). It passed on the first verify, after 8 repo-tool calls, for $0.0043 on Haiku. With the role check removed from the app, the test it wrote fails.
+
 The agent hands over a test file only when it's green or when it documents a suspected app defect. It never hands over tests it couldn't get working.
 
 Failure handling, in order of how often it came up:
@@ -84,7 +92,7 @@ uv run aeg run --agent storywright --command "uv run --project ../storywright st
 ## Not in v1
 
 - Production code changes; Storywright writes tests only
-- Jira input and opening pull requests; stories come from files for now
+- Opening pull requests, and writing back to Jira (comments, status changes)
 - Multiple trials on the `report` profile
 
 ## License
