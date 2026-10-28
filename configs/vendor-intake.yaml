@@ -1,0 +1,22 @@
+# How Storywright works with github.com/dholman7/vendor-intake-app.
+context_files:
+  - openapi.json
+  - e2e/fixtures/index.ts
+  - e2e/playwright.config.ts
+  - e2e/api/auth.spec.ts
+test_dir: e2e/api/generated
+app:
+  cwd: backend
+  command: uv run python -m vendor_intake.seed && exec uv run uvicorn vendor_intake.main:create_app --factory --port {port}
+  env:
+    VI_DATABASE_URL: sqlite:///{data_dir}/vendor_intake.db
+    VI_STORAGE_DIR: "{data_dir}/uploads"
+    VI_EXTRACTION_DELAY_SECONDS: "0"
+  health: http://127.0.0.1:{port}/api/health
+tests:
+  cwd: e2e
+  typecheck: npx tsc --noEmit --pretty false
+  run: npx playwright test --project=api {path} --reporter=json
+  env:
+    API_URL: http://127.0.0.1:{port}
+    E2E_EXTERNAL_SERVERS: "1"
