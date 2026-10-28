@@ -56,7 +56,13 @@ storywright run --repo ../app --story story.feature --task-id VEN-01 \
 storywright run --repo ../vendor-intake-app --jira KAN-1
 ```
 
-The first live run was on a story whose behavior none of the benchmark's scenarios test (members can't record review decisions). It passed on the first verify, after 8 repo-tool calls, for $0.0043 on Haiku. With the role check removed from the app, the test it wrote fails.
+Live runs on three Jira stories, each covering behavior none of the benchmark's scenarios test, on Haiku. To check each test against a real bug, the matching rule was removed from the app and the test run again:
+
+| Story | Verify | Tool calls | Cost | With the rule removed |
+|---|---|---|---|---|
+| Members cannot record review decisions (403) | passed first try | 8 | $0.0043 | fails: the member's approval goes through |
+| An extraction can only be decided once (409) | passed first try | 7 | $0.0047 | fails: the second decision is accepted |
+| Upload type comes from the file extension (3 examples) | passed first try | 4 | $0.0025 | the mismatched-type example fails; the two valid ones still pass |
 
 The agent hands over a test file only when it's green or when it documents a suspected app defect. It never hands over tests it couldn't get working.
 
