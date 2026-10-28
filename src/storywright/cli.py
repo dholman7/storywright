@@ -14,6 +14,7 @@ from storywright import graph as agent_graph
 from storywright import prompts
 from storywright.llm import Claude
 from storywright.repo import RepoConfig, Verification, read_context, verify
+from storywright.tools import Toolbox
 
 DEFAULT_CONFIG = Path(__file__).parents[2] / "configs" / "vendor-intake.yaml"
 
@@ -29,7 +30,7 @@ def solve(
     max_repairs: int,
     budget_usd: float,
 ) -> agent_graph.State:
-    llm = Claude()
+    llm = Claude(toolbox=Toolbox(repo))
 
     def verifier(task: str, code: str) -> Verification:
         path = agent_graph.test_path(repo, config.test_dir, task)
@@ -62,11 +63,13 @@ def solve(
             {
                 "verdict": final.get("verdict"),
                 "reason": final.get("reason"),
+                "tool_calls": llm.tool_calls,
                 "log": final.get("log", []),
             },
             indent=2,
         )
     )
+    final["log"] = [*final.get("log", []), f"tool calls: {llm.tool_calls}"]
     return final
 
 
@@ -104,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
         max_repairs=args.max_repairs,
         budget_usd=args.budget_usd,
     )
+    for line in final.get("log", []):
+        print(f"  {line}", file=sys.stderr)
     print(f"{task_id}: {final.get('verdict')}: {final.get('reason')}", file=sys.stderr)
     return 0 if final.get("verdict") in ("passing", "app_defect") else 1
 

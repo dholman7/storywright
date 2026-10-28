@@ -5,6 +5,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from storywright.tools import DEFINITIONS as TOOL_DEFINITIONS
+from storywright.tools import Toolbox, ToolError
+
 # (model, effort) per profile. `dev` is the default so routine runs stay cheap; publish numbers
 # from `report`. STORYWRIGHT_MODEL and STORYWRIGHT_EFFORT override either part.
 PROFILES: dict[str, tuple[str, str]] = {
@@ -71,34 +74,21 @@ def resolve() -> tuple[str, str]:
 
 
 class Claude:
-    def __init__(self, client: Any | None = None) -> None:
+    def __init__(
+        self, client: Any | None = None, toolbox: Toolbox | None = None, max_tool_calls: int = 12
+    ) -> None:
         import anthropic
 
         self.client = client or anthropic.Anthropic()
         self.model, self.effort = resolve()
         self.spend = Spend()
+        self.toolbox = toolbox
+        self.max_tool_calls = max_tool_calls
+        self.tool_calls = 0
 
-    def call(
-        self, system: str, context: str, prompt: str, schema: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _create(self, params: dict[str, Any]) -> Any:
         import anthropic
 
-        params: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": 16000,
-            # Stable instructions and repo context first, so repair calls hit the cache.
-            "system": [
-                {"type": "text", "text": system},
-                {"type": "text", "text": context, "cache_control": {"type": "ephemeral"}},
-            ],
-            "messages": [{"role": "user", "content": prompt}],
-            "output_config": {
-                "effort": self.effort,
-                "format": {"type": "json_schema", "schema": schema},
-            },
-        }
-        if self.model in FALLBACK_MODELS:
-            params |= {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
         try:
             response = self.client.beta.messages.create(**params)
         except anthropic.APIStatusError as exc:
@@ -106,6 +96,72 @@ class Claude:
         except anthropic.APIConnectionError as exc:
             raise LLMError(f"connection error: {exc}") from exc
         self.spend.add(response.model, response.usage)
+        return response
+
+    def _tool_results(self, response: Any, budget: int) -> tuple[list[dict[str, Any]], int]:
+        """Runs each requested tool. Over budget, the call is answered with an error instead."""
+        results = []
+        for block in response.content:
+            if block.type != "tool_use":
+                continue
+            if self.toolbox is None:
+                raise LLMError(f"model called {block.name!r} but no tools were offered")
+            if budget <= 0:
+                content, is_error = "Tool budget used up. Answer now with what you have.", True
+            else:
+                budget -= 1
+                self.tool_calls += 1
+                try:
+                    content, is_error = self.toolbox.run(block.name, dict(block.input)), False
+                except ToolError as exc:
+                    content, is_error = f"Error: {exc}", True
+            results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": content,
+                    "is_error": is_error,
+                }
+            )
+        return results, budget
+
+    def call(
+        self, system: str, context: str, prompt: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+        params: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": 16000,
+            # Stable instructions and repo context first, so later calls hit the cache.
+            "system": [
+                {"type": "text", "text": system},
+                {"type": "text", "text": context, "cache_control": {"type": "ephemeral"}},
+            ],
+            "messages": messages,
+            "output_config": {
+                "effort": self.effort,
+                "format": {"type": "json_schema", "schema": schema},
+            },
+        }
+        if self.toolbox is not None:
+            params["tools"] = TOOL_DEFINITIONS
+        if self.model in FALLBACK_MODELS:
+            params |= {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+
+        budget = self.max_tool_calls
+        # Each round either answers or calls tools; past the budget every call is refused, so
+        # the model has to answer. The extra rounds leave room for that final answer.
+        for _ in range(self.max_tool_calls + 3):
+            response = self._create(params)
+            if response.stop_reason != "tool_use":
+                break
+            # Append the content unchanged: thinking blocks must be passed back as received.
+            messages.append({"role": "assistant", "content": response.content})
+            results, budget = self._tool_results(response, budget)
+            messages.append({"role": "user", "content": results})
+        else:
+            raise LLMError("kept calling tools after the tool budget was used up")
+
         if response.stop_reason == "refusal":
             raise LLMError("the model declined the request")
         if response.stop_reason == "max_tokens":

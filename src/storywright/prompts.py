@@ -11,6 +11,9 @@ How to write tests here:
 - Test behavior through the HTTP API: status codes, error codes, and the fields the scenario
   names. Use the OpenAPI document for paths and payloads.
 - Tests share one database and run in parallel. Give everything you create a unique name.
+- You can read the repository with list_files, read_file, and search. Before inventing test
+  data the app must parse (an uploaded document, a date, an identifier), look up the format it
+  expects in sample files or the code that parses it.
 - Some work happens in the background after a request returns. Poll with expect.poll until
   the state you need is reached instead of assuming it is immediate.
 - Make failures explain themselves: give every status assertion the response body as its
