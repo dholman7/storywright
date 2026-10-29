@@ -3,6 +3,7 @@
 storywright run --repo PATH --story FILE --task-id ID [--config FILE] [--out DIR]
 storywright run --repo PATH --jira KEY [--config FILE] [--out DIR]   # needs JIRA_* variables
 storywright publish --repo PATH --jira KEY [--out DIR] [--yes]       # PR + Jira comment
+storywright close --branch B --pr-url URL --sha SHA [--yes]          # after the PR merges
 storywright aeg [--config FILE]     # agent-eval-gate command contract (AEG_* variables)
 """
 
@@ -17,7 +18,7 @@ from storywright import prompts
 from storywright.jira import JiraClient, JiraError, JiraWriter
 from storywright.llm import Claude
 from storywright.mcp_tools import McpTools, ServerSpec, connect
-from storywright.publish import Handover, PublishError, plan, publish
+from storywright.publish import Handover, PublishError, close, key_from_branch, plan, publish
 from storywright.repo import RepoConfig, Verification, read_context, verify
 from storywright.tools import Toolbox
 
@@ -121,7 +122,15 @@ def main(argv: list[str] | None = None) -> int:
     pub.add_argument(
         "--yes", action="store_true", help="perform the plan; without it, only print it"
     )
+    cl = sub.add_parser("close", help="close the Jira issue once a Storywright PR merges")
+    cl.add_argument("--branch", required=True, help="the merged PR's head branch")
+    cl.add_argument("--pr-url", required=True)
+    cl.add_argument("--sha", required=True, help="the merge commit")
+    cl.add_argument("--status", default="Done")
+    cl.add_argument("--yes", action="store_true", help="perform it; without it, only print it")
     args = parser.parse_args(argv)
+    if args.command == "close":
+        return _close(args)
     if args.command == "run" and args.story and not args.task_id:
         parser.error("--task-id is required with --story")
     config = RepoConfig.load(args.config)
@@ -180,6 +189,23 @@ def _publish(args: argparse.Namespace, config: RepoConfig) -> int:
         print(f"storywright: {e}", file=sys.stderr)
         return 2
     print(url or f"commented on {args.jira}")
+    return 0
+
+
+def _close(args: argparse.Namespace) -> int:
+    key = key_from_branch(args.branch)
+    if key is None:
+        print(f"{args.branch} isn't a Storywright branch; nothing to do", file=sys.stderr)
+        return 0
+    print(f"{key}: comment the merge ({args.sha[:7]}), move to {args.status!r}", file=sys.stderr)
+    if not args.yes:
+        print("dry run: pass --yes to do this", file=sys.stderr)
+        return 0
+    try:
+        close(JiraWriter.from_env(), key, args.pr_url, args.sha, args.status)
+    except JiraError as e:
+        print(f"storywright: {e}", file=sys.stderr)
+        return 2
     return 0
 
 

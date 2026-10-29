@@ -13,7 +13,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from storywright.jira import JiraWriter
+from storywright.jira import ISSUE_KEY, JiraWriter
+
+BRANCH_PREFIX = "storywright/"
 
 # argv, cwd -> stdout. Tests swap in a fake for `gh`.
 Runner = Callable[[list[str], Path], str]
@@ -96,7 +98,7 @@ def plan(handover: Handover, summary: str, test_dir: str, status: str = "In Revi
             handover,
             summary,
             test_file=f"{test_dir}/{handover.task_id}.spec.ts",
-            branch=f"storywright/{handover.task_id.lower()}",
+            branch=f"{BRANCH_PREFIX}{handover.task_id.lower()}",
             status=status,
         )
     if handover.verdict == "app_defect":
@@ -170,3 +172,17 @@ def publish(
     if p.status:
         jira.transition(h.task_id, p.status)
     return url
+
+
+def key_from_branch(branch: str) -> str | None:
+    """`storywright/kan-1` -> `KAN-1`; None for any branch `publish` didn't create."""
+    if not branch.startswith(BRANCH_PREFIX):
+        return None
+    key = branch.removeprefix(BRANCH_PREFIX).upper()
+    return key if ISSUE_KEY.match(key) else None
+
+
+def close(jira: JiraWriter, key: str, pr_url: str, merge_sha: str, status: str = "Done") -> None:
+    """After the pull request merges: record where the tests landed, then close the issue."""
+    jira.comment(key, f"Merged in {merge_sha[:7]}; the tests are on the main branch.", link=pr_url)
+    jira.transition(key, status)

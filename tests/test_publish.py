@@ -9,7 +9,15 @@ import pytest
 
 from storywright import cli
 from storywright.jira import JiraError, JiraWriter
-from storywright.publish import Handover, PublishError, plan, publish, run_command
+from storywright.publish import (
+    Handover,
+    PublishError,
+    close,
+    key_from_branch,
+    plan,
+    publish,
+    run_command,
+)
 
 TEST_DIR = "e2e/api/generated"
 PR_URL = "https://github.com/owner/app/pull/7"
@@ -170,3 +178,50 @@ def test_cli_publish_without_yes_only_reads(
     err = capsys.readouterr().err
     assert "open a pull request into main from storywright/kan-1" in err
     assert "dry run: pass --yes" in err
+
+
+@pytest.mark.parametrize(
+    ("branch", "key"),
+    [
+        ("storywright/kan-1", "KAN-1"),
+        ("storywright/abc2-104", "ABC2-104"),
+        ("main", None),
+        ("feature/kan-1", None),
+        ("storywright/not-a-key", None),
+        ("storywright/kan-1/../x", None),
+    ],
+)
+def test_key_from_branch_accepts_only_branches_publish_creates(
+    branch: str, key: str | None
+) -> None:
+    assert key_from_branch(branch) == key
+
+
+def test_close_comments_the_merge_and_moves_the_issue_to_done() -> None:
+    seen: list[httpx.Request] = []
+    jira = _jira(seen, [{"id": "41", "name": "Done", "to": {"name": "Done"}}])
+
+    close(jira, "KAN-1", PR_URL, "c3b71490000000000000000000000000000000000")
+
+    comment, transition = (r for r in seen if r.method == "POST")
+    text = json.loads(comment.content)["body"]["content"][0]["content"]
+    assert text[0]["text"].startswith("Merged in c3b7149;")
+    assert text[-1]["marks"][0]["attrs"]["href"] == PR_URL
+    assert json.loads(transition.content) == {"transition": {"id": "41"}}
+
+
+def test_cli_close_ignores_other_branches_and_dry_runs_by_default(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def no_jira(cls: Any) -> JiraWriter:
+        raise AssertionError("Jira must not be contacted")
+
+    monkeypatch.setattr(JiraWriter, "from_env", classmethod(no_jira))
+    common = ["--pr-url", PR_URL, "--sha", "c3b7149"]
+
+    assert cli.main(["close", "--branch", "feature/x", *common, "--yes"]) == 0
+    assert cli.main(["close", "--branch", "storywright/kan-1", *common]) == 0
+    err = capsys.readouterr().err
+    assert "isn't a Storywright branch" in err
+    assert "KAN-1: comment the merge (c3b7149), move to 'Done'" in err
+    assert "dry run" in err

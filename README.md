@@ -75,6 +75,8 @@ storywright publish --repo ../vendor-intake-app --jira KAN-1 --yes    # does it
 - `app_defect`: comments the agent's diagnosis on the issue. No PR.
 - Anything else (`test_bug`, `environment`, a spent budget) is refused, and nothing is written.
 
+`storywright close --branch storywright/kan-1 --pr-url URL --sha SHA --yes` runs once the PR merges. It comments the merge commit on the issue and moves the issue to Done. It ignores any branch `publish` didn't create. vendor-intake-app runs it from a [workflow](https://github.com/dholman7/vendor-intake-app/blob/main/.github/workflows/close-jira-on-merge.yml) on merged same-repo PRs only, with Storywright pinned to a commit.
+
 The agent hands over a test file only when it's green or when it documents a suspected app defect. It never hands over tests it couldn't get working.
 
 Failure handling, in order of how often it came up:
@@ -109,7 +111,7 @@ uv run aeg run --agent storywright --command "uv run --project ../storywright st
 ## Not in v1
 
 - Production code changes; Storywright writes tests only
-- Running in GitHub Actions on a Jira webhook; `publish` is run by hand for now
+- Starting runs from a Jira webhook; `run` and `publish` are started by hand
 - Multiple trials on the `report` profile
 
 ## License
