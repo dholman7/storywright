@@ -50,7 +50,7 @@ storywright run --repo ../app --story story.feature --task-id VEN-01 \
   --mcp-env GITHUB_TOKEN --mcp-env CI_CONTEXT_REPOS
 ```
 
-**Jira stories.** `--jira KEY` reads the story from a Jira Cloud issue instead of a file. The issue key becomes the test tag. A `gherkin` code block in the description is used as the scenario; with none, Storywright falls back to the summary and description prose. The client only issues GETs, refuses anything that isn't an issue key before making a request, and reports 401/403/404 as plain messages without credentials. It reads `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_TOKEN` (an Atlassian API token):
+**Jira stories.** `--jira KEY` reads the story from a Jira Cloud issue instead of a file. The issue key becomes the test tag. A `gherkin` code block in the description is used as the scenario; with none, Storywright falls back to the summary and description prose. The client only issues GETs, refuses anything that isn't an issue key before making a request, and reports 401/403/404 as plain messages without credentials. It reads `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_TOKEN` (an Atlassian API token). Use a scoped token with only `read:jira-work` (`run`) and `write:jira-work` (`publish`, `close`). Scoped tokens only work through Atlassian's API gateway, so `JIRA_BASE_URL` is then `https://api.atlassian.com/ex/jira/<cloud-id>`, not the site URL, which answers them with 404:
 
 ```bash
 storywright run --repo ../vendor-intake-app --jira KAN-1
