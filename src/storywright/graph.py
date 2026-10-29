@@ -1,4 +1,4 @@
-"""The agent as a LangGraph state machine: write -> verify -> (repair -> verify)* -> outcome.
+r"""The agent as a LangGraph state machine: write -> verify -> (repair -> verify)* -> outcome.
 
 write --> verify --green--> passing
              |
