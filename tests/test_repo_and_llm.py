@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -5,15 +6,56 @@ from typing import Any
 import pytest
 
 from storywright import llm as llm_module
-from storywright.repo import RepoConfig, Verification, parse_report
+from storywright.repo import (
+    RepoConfig,
+    Verification,
+    _lint,
+    parse_report,
+    read_context,
+)
+from storywright.repo import TestsConfig as LintSettings  # not collected as a test class
 
 CONFIG = Path(__file__).parents[1] / "configs" / "vendor-intake.yaml"
 
 
 def test_shipped_config_loads() -> None:
     config = RepoConfig.load(CONFIG)
-    assert config.test_dir == "e2e/api/generated"
-    assert "{port}" in config.app.command
+    assert config.kinds["api"].test_dir == "e2e/api/generated"
+    assert config.kinds["ui"].services == ["api", "web"]
+    assert "{api_port}" in config.services["api"].command
+    assert "{api_port}" in config.services["web"].env["API_ORIGIN"]
+
+
+def test_read_context_adds_examples_for_the_kinds_and_skips_missing_files(tmp_path: Path) -> None:
+    config = RepoConfig.load(CONFIG)
+    (tmp_path / "e2e" / "ui").mkdir(parents=True)
+    (tmp_path / "e2e" / "AGENTS.md").write_text("rules")
+    (tmp_path / "e2e" / "ui" / "vendors.spec.ts").write_text("ui example")
+
+    api_only = read_context(tmp_path, config, ["api"])
+    both = read_context(tmp_path, config, ["api", "ui"])
+
+    assert set(api_only) == {"e2e/AGENTS.md"}
+    assert set(both) == {"e2e/AGENTS.md", "e2e/ui/vendors.spec.ts"}
+
+
+def test_lint_runs_only_once_the_repo_has_adopted_the_rules(tmp_path: Path) -> None:
+    messages = [
+        {"line": 4, "message": "PW-4: no passwords", "severity": 2},
+        {"line": 9, "message": "style", "severity": 1},
+    ]
+    report = json.dumps([{"messages": messages}])
+    tests = LintSettings(
+        cwd=".", typecheck="true", lint=f"echo '{report}'", lint_if="eslint.config.mjs"
+    )
+    spec = tmp_path / "a.spec.ts"
+
+    before = _lint(tmp_path, tests, spec)
+    (tmp_path / "eslint.config.mjs").write_text("export default []")
+    after = _lint(tmp_path, tests, spec)
+
+    assert before == []
+    assert after == ["line 4: PW-4: no passwords"]  # warnings don't block
 
 
 def test_parse_report_collects_failures_and_tags() -> None:

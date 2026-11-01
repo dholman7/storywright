@@ -35,16 +35,28 @@ class ScriptedLLM:
         return reply
 
 
-def _run(llm: ScriptedLLM, results: list[Verification], **kwargs: Any) -> agent_graph.State:
+DIRS = {"api": "e2e/api/generated", "ui": "e2e/ui/generated"}
+
+
+def _run(
+    llm: ScriptedLLM,
+    results: list[Verification],
+    seen: list[agent_graph.State] | None = None,
+    **kwargs: Any,
+) -> agent_graph.State:
     verifications = iter(results)
-    compiled = agent_graph.build(
-        llm, "<context/>", "e2e/api/generated", lambda task, code: next(verifications), **kwargs
-    )
+
+    def verifier(state: agent_graph.State) -> Verification:
+        if seen is not None:
+            seen.append(dict(state))  # type: ignore[arg-type]
+        return next(verifications)
+
+    compiled = agent_graph.build(llm, "<context/>", kwargs.pop("dirs", DIRS), verifier, **kwargs)
     return agent_graph.run(compiled, "VEN-01", "Scenario: Create a vendor", TAG)
 
 
-def _write(code: str = GOOD) -> dict[str, Any]:
-    return {"approach": "create then assert", "code": code}
+def _write(code: str = GOOD, kind: str = "api", **extra: Any) -> dict[str, Any]:
+    return {"kind": kind, "approach": "create then assert", "code": code, **extra}
 
 
 def _repair(diagnosis: str = "test_bug", code: str = GOOD) -> dict[str, Any]:
@@ -112,3 +124,75 @@ def test_weakening_guard(after: str, problem: str | None) -> None:
 def test_assertion_count_includes_poll_and_soft() -> None:
     code = "expect(a).toBe(1); await expect.poll(f).toBe(2); expect.soft(b).toBe(3); notexpect(c)"
     assert assertion_count(code) == 3
+
+
+PAGES = "export class VendorPage {\n  readonly submitButton: Locator;\n}\n"
+PAGES_PLUS = (
+    "export class VendorPage {\n  readonly submitButton: Locator;\n  readonly notice: Locator;\n}\n"
+)
+PAGES_CHANGED = "export class VendorPage {\n  readonly submit: Locator;\n}\n"
+
+
+def test_the_model_picks_the_kind_and_the_verifier_runs_that_kind() -> None:
+    seen: list[agent_graph.State] = []
+
+    final = _run(ScriptedLLM([_write(kind="ui")]), [GREEN], seen)
+
+    assert final["kind"] == "ui" and seen[0]["kind"] == "ui"
+    assert "kind: ui" in final["log"]
+
+
+def test_the_prompt_offers_only_the_allowed_kinds_and_their_files() -> None:
+    llm = ScriptedLLM([_write()])
+
+    _run(llm, [GREEN], dirs={"api": "e2e/api/generated"})
+
+    assert "- api: e2e/api/generated/VEN-01.spec.ts" in llm.prompts[0]
+    assert "ui" not in llm.prompts[0].split("Choose the kind")[1]
+
+
+def test_an_additive_page_object_edit_is_verified_with_the_test() -> None:
+    seen: list[agent_graph.State] = []
+    llm = ScriptedLLM([_write(kind="ui", page_objects=PAGES_PLUS)])
+
+    final = _run(llm, [GREEN], seen, page_objects=("e2e/fixtures/pages.ts", PAGES))
+
+    assert seen[0]["page_objects"] == PAGES_PLUS
+    assert final["page_objects"] == PAGES_PLUS
+
+
+def test_a_page_object_edit_that_changes_existing_lines_is_dropped_at_write() -> None:
+    seen: list[agent_graph.State] = []
+    llm = ScriptedLLM([_write(kind="ui", page_objects=PAGES_CHANGED)])
+
+    final = _run(llm, [GREEN], seen, page_objects=("e2e/fixtures/pages.ts", PAGES))
+
+    assert seen[0]["page_objects"] == ""
+    assert any("page-object edit rejected" in line for line in final["log"])
+
+
+def test_a_repair_that_changes_existing_page_objects_is_rejected() -> None:
+    llm = ScriptedLLM(
+        [
+            _write(kind="ui", page_objects=""),
+            _repair() | {"page_objects": PAGES_CHANGED},
+            _repair() | {"page_objects": PAGES_PLUS},
+        ]
+    )
+
+    final = _run(llm, [RED, GREEN], page_objects=("e2e/fixtures/pages.ts", PAGES))
+
+    assert final["verdict"] == "passing"
+    assert any("rejected: the page-object edit changed" in line for line in final["log"])
+
+
+def test_lint_errors_block_green_and_reach_the_repair() -> None:
+    linted = Verification(
+        typechecks=True, passed=1, passed_tags=[TAG], lint_errors=["line 4: PW-4: no passwords"]
+    )
+    llm = ScriptedLLM([_write(), _repair()])
+
+    final = _run(llm, [linted, GREEN])
+
+    assert final["verdict"] == "passing" and final["repairs"] == 1
+    assert "Lint errors" in llm.prompts[1] and "PW-4" in llm.prompts[1]

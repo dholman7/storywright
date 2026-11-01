@@ -1,22 +1,54 @@
 # How Storywright works with github.com/dholman7/vendor-intake-app.
+# Files missing at the commit being tested (an older benchmark target, say) are skipped.
 context_files:
   - openapi.json
+  - e2e/AGENTS.md
   - e2e/fixtures/index.ts
+  - e2e/fixtures/factory.ts
+  - e2e/fixtures/http.ts
   - e2e/playwright.config.ts
-  - e2e/api/auth.spec.ts
-test_dir: e2e/api/generated
-app:
-  cwd: backend
-  command: uv run python -m vendor_intake.seed && exec uv run uvicorn vendor_intake.main:create_app --factory --port {port}
-  env:
-    VI_DATABASE_URL: sqlite:///{data_dir}/vendor_intake.db
-    VI_STORAGE_DIR: "{data_dir}/uploads"
-    VI_EXTRACTION_DELAY_SECONDS: "0"
-  health: http://127.0.0.1:{port}/api/health
+page_objects: e2e/fixtures/pages.ts
+
+services:
+  api:
+    cwd: backend
+    command: uv run python -m vendor_intake.seed && exec uv run uvicorn vendor_intake.main:create_app --factory --port {api_port}
+    env:
+      VI_DATABASE_URL: sqlite:///{data_dir}/vendor_intake.db
+      VI_STORAGE_DIR: "{data_dir}/uploads"
+      VI_EXTRACTION_DELAY_SECONDS: "0"
+    health: http://127.0.0.1:{api_port}/api/health
+  web:
+    cwd: frontend
+    command: exec npx next dev --port {web_port} --hostname 127.0.0.1
+    env:
+      API_ORIGIN: http://127.0.0.1:{api_port}
+    # The first page compile in dev mode can take a while.
+    health: http://127.0.0.1:{web_port}/login
+    timeout_s: 180
+
+kinds:
+  api:
+    test_dir: e2e/api/generated
+    run: npx playwright test --project=api {path} --reporter=json
+    services: [api]
+    examples:
+      - e2e/api/generated/KAN-4.spec.ts
+      - e2e/api/auth.spec.ts
+  ui:
+    test_dir: e2e/ui/generated
+    run: npx playwright test --project=ui {path} --reporter=json
+    services: [api, web]
+    examples:
+      - e2e/ui/vendors.spec.ts
+      - e2e/ui/onboarding.spec.ts
+
 tests:
   cwd: e2e
   typecheck: npx tsc --noEmit --pretty false
-  run: npx playwright test --project=api {path} --reporter=json
+  lint: npx eslint --format json {path}
+  lint_if: eslint.config.mjs
   env:
-    API_URL: http://127.0.0.1:{port}
+    API_URL: http://127.0.0.1:{api_port}
+    WEB_URL: http://127.0.0.1:{web_port}
     E2E_EXTERNAL_SERVERS: "1"

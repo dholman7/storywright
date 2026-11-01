@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from storywright.jira import ISSUE_KEY, JiraWriter
@@ -43,6 +43,11 @@ class Handover:
     tool_calls: int
     cost_usd: float
     model: str
+    # Where the run put the test (it depends on the kind), and shared files it extended:
+    # repo path -> file in the output directory. Older runs recorded neither.
+    test_file: str | None = None
+    kind: str = "api"
+    extra_files: dict[str, Path] = field(default_factory=dict)
 
     @classmethod
     def load(cls, out: Path, task_id: str) -> "Handover":
@@ -62,6 +67,11 @@ class Handover:
             tool_calls=int(log.get("tool_calls", 0)),
             cost_usd=float(usage["cost_usd"]),
             model=str(usage["model"]),
+            test_file=log.get("test_file"),
+            kind=str(log.get("kind") or "api"),
+            extra_files={
+                repo_path: out / name for repo_path, name in (log.get("extra_files") or {}).items()
+            },
         )
 
 
@@ -76,9 +86,10 @@ class Plan:
     def describe(self, base: str) -> str:
         lines = [f"{self.handover.task_id}: verdict {self.handover.verdict}"]
         if self.branch:
+            files = [self.test_file, *self.handover.extra_files]
             lines += [
                 f"  open a pull request into {base} from {self.branch}",
-                f"  adding only {self.test_file}",
+                f"  adding only {', '.join(str(f) for f in files)}",
                 f"  comment the PR link on {self.handover.task_id}",
             ]
         else:
@@ -97,7 +108,7 @@ def plan(handover: Handover, summary: str, test_dir: str, status: str = "In Revi
         return Plan(
             handover,
             summary,
-            test_file=f"{test_dir}/{handover.task_id}.spec.ts",
+            test_file=handover.test_file or f"{test_dir}/{handover.task_id}.spec.ts",
             branch=f"{BRANCH_PREFIX}{handover.task_id.lower()}",
             status=status,
         )
@@ -111,8 +122,10 @@ def plan(handover: Handover, summary: str, test_dir: str, status: str = "In Revi
 def pr_body(p: Plan) -> str:
     h = p.handover
     return (
-        f"Adds `{p.test_file}`, written by Storywright from Jira {h.task_id}: {p.summary}\n\n"
-        f"- Verdict: {h.verdict} ({h.reason})\n"
+        f"Adds `{p.test_file}` ({h.kind} test), written by Storywright from Jira {h.task_id}: "
+        f"{p.summary}\n\n"
+        + "".join(f"Also extends `{path}` (additions only).\n\n" for path in h.extra_files)
+        + f"- Verdict: {h.verdict} ({h.reason})\n"
         f"- Model: {h.model}, {h.tool_calls} repo-tool calls, ${h.cost_usd:.4f}\n\n"
         "The test passed against the running app before this pull request was opened. "
         "Review it like any other change."
@@ -120,7 +133,8 @@ def pr_body(p: Plan) -> str:
 
 
 def open_pull_request(repo: Path, p: Plan, base: str, run: Runner = run_command) -> str:
-    """Commits the one test file on a new branch in a throwaway worktree, pushes, opens the PR."""
+    """Commits the test file (and any shared file it extended) on a new branch in a throwaway
+    worktree, pushes, and opens the PR."""
     h = p.handover
     if not (p.branch and p.test_file and h.spec):
         raise PublishError(f"{h.task_id} has no passing test to open a pull request with")
@@ -129,18 +143,20 @@ def open_pull_request(repo: Path, p: Plan, base: str, run: Runner = run_command)
         run(["git", "fetch", "origin", base], repo)
         run(["git", "worktree", "add", "-b", p.branch, str(tree), f"origin/{base}"], repo)
         try:
-            target = tree / p.test_file
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(h.spec, target)
-            run(["git", "add", "--", p.test_file], tree)
-            run(["git", "commit", "-m", f"test(api): {h.task_id} {p.summary}"], tree)
+            files = {p.test_file: h.spec, **h.extra_files}
+            for repo_path, source in files.items():
+                target = tree / repo_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+            run(["git", "add", "--", *files], tree)
+            run(["git", "commit", "-m", f"test({h.kind}): {h.task_id} {p.summary}"], tree)
             run(["git", "push", "-u", "origin", p.branch], tree)
             return run(
                 [
                     "gh", "pr", "create",
                     "--base", base,
                     "--head", p.branch,
-                    "--title", f"test(api): {h.task_id} {p.summary}",
+                    "--title", f"test({h.kind}): {h.task_id} {p.summary}",
                     "--body", pr_body(p),
                 ],
                 tree,

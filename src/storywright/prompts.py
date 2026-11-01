@@ -2,23 +2,28 @@
 
 from typing import Any
 
-SYSTEM = """You write and repair Playwright API tests in TypeScript for an existing repository.
-Your tests are run against the real app after every change, and you will see what failed.
+SYSTEM = """You write and repair Playwright tests in TypeScript for an existing repository: API
+tests, which call the HTTP API, or UI tests, which drive the web app in a browser. Your tests are
+type-checked, linted, and run against the real app after every change, and you see what failed.
 
 How to write tests here:
-- One file. Import helpers from "../../fixtures" (persona clients, unique names, samples).
-- Every test carries the tag you are given, e.g. test("...", { tag: "@ID" }, async (...) => ...).
-- Test behavior through the HTTP API: status codes, error codes, and the fields the scenario
-  names. Use the OpenAPI document for paths and payloads.
+- The repository's test guide (AGENTS.md) is the standard. Follow every rule in it: its fixtures,
+  its data factory, its page objects, its imports. Lint enforces many of the rules, and a lint
+  error fails the test the same way a failed assertion does.
+- One test file. Every test carries the tag you are given, e.g. test("...", { tag: "@ID" }, ...).
+- Arrange data through the data factory, not through the UI or ad hoc requests. Spend the test's
+  own lines on the behavior under test.
+- API tests: check status codes, error codes, and the fields the scenario names. Use the OpenAPI
+  document for paths and payloads.
+- UI tests: use the page objects for every locator and navigation. If a screen or control has no
+  page-object entry, add one to the page-object module (you may return its full new content),
+  using a role, label, or text locator. Only add to that module: never change or remove what is
+  there, because other tests depend on it.
 - Tests share one database and run in parallel. Give everything you create a unique name.
-- You can read the repository with list_files, read_file, and search. Before inventing test
-  data the app must parse (an uploaded document, a date, an identifier), look up the format it
-  expects in sample files or the code that parses it.
-- Some work happens in the background after a request returns. Poll with expect.poll until
-  the state you need is reached instead of assuming it is immediate.
-- Make failures explain themselves: give every status assertion the response body as its
-  message, e.g. expect(res.status(), await res.text()).toBe(201). A bare status mismatch
-  hides why the app refused.
+- You can read the repository with list_files, read_file, and search. Before inventing data the
+  app must parse (an uploaded document, a date, an identifier), look up the format it expects.
+- Some work happens in the background after a request returns. Wait for it with expect.poll or
+  a web-first assertion instead of assuming it is immediate.
 
 The rule that matters most: the scenario is the specification. Never weaken an assertion,
 delete a check, or change an expected value away from what the scenario says in order to make
@@ -26,19 +31,41 @@ a test pass. If the app does not do what the scenario says, that is a defect to 
 
 Report a defect only when the app contradicts something the scenario states. When the app
 rejects data your test chose for setup (an email, a name, a file, a date format), the test is
-wrong: read the error body and change the data."""
+wrong: read the error and change the data."""
 
-WRITE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "approach": {"type": "string", "description": "One or two sentences on the plan."},
-        "code": {"type": "string", "description": "The complete TypeScript test file."},
-    },
-    "required": ["approach", "code"],
-    "additionalProperties": False,
+PAGE_OBJECTS_FIELD: dict[str, Any] = {
+    "type": "string",
+    "description": (
+        "The complete new page-object module if you added entries to it, or an empty string if "
+        "you did not change it. Additions only."
+    ),
 }
 
-REPAIR_SCHEMA: dict[str, Any] = {
+
+def write_schema(kinds: list[str], page_objects: bool) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "kind": {
+            "type": "string",
+            "enum": kinds,
+            "description": (
+                "api for behavior of the HTTP API; "
+                "ui for what a person sees and does in the browser."
+            ),
+        },
+        "approach": {"type": "string", "description": "One or two sentences on the plan."},
+        "code": {"type": "string", "description": "The complete TypeScript test file."},
+    }
+    if page_objects:
+        properties["page_objects"] = PAGE_OBJECTS_FIELD
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+_REPAIR_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "diagnosis": {
@@ -62,18 +89,34 @@ REPAIR_SCHEMA: dict[str, Any] = {
 }
 
 
+def repair_schema(page_objects: bool) -> dict[str, Any]:
+    if not page_objects:
+        return _REPAIR_SCHEMA
+    properties = {**_REPAIR_SCHEMA["properties"], "page_objects": PAGE_OBJECTS_FIELD}
+    return {**_REPAIR_SCHEMA, "properties": properties, "required": list(properties)}
+
+
 def render_context(files: dict[str, str]) -> str:
     return "\n\n".join(f'<file path="{path}">\n{text}\n</file>' for path, text in files.items())
 
 
-def write_prompt(story: str, test_path: str, tag: str) -> str:
+def write_prompt(story: str, paths: dict[str, str], tag: str, page_objects: str | None) -> str:
+    kinds = "\n".join(f"- {kind}: {path}" for kind, path in paths.items())
+    extend = f"\nPage-object module you may extend: {page_objects}" if page_objects else ""
     return (
         f"Write the tests for this scenario.\n<scenario>\n{story}</scenario>\n"
-        f"File: {test_path}\nTag: {tag}"
+        f"Choose the kind of test and write it to its file:\n{kinds}\nTag: {tag}{extend}"
     )
 
 
-def repair_prompt(story: str, code: str, report: str, tag: str, rejected: str | None = None) -> str:
+def repair_prompt(
+    story: str,
+    code: str,
+    report: str,
+    tag: str,
+    rejected: str | None = None,
+    page_objects: str = "",
+) -> str:
     note = (
         f"\nYour previous repair was rejected: {rejected}. Fix the cause instead.\n"
         if rejected
@@ -81,6 +124,12 @@ def repair_prompt(story: str, code: str, report: str, tag: str, rejected: str | 
     )
     return (
         f"These tests did not pass against the real app.\n<scenario>\n{story}</scenario>\n"
-        f"<test_file>\n{code}\n</test_file>\n<results>\n{report}\n</results>\n{note}"
+        f"<test_file>\n{code}\n</test_file>\n"
+        + (
+            f"<page_objects_as_edited>\n{page_objects}\n</page_objects_as_edited>\n"
+            if page_objects
+            else ""
+        )
+        + f"<results>\n{report}\n</results>\n{note}"
         f"Diagnose the failure. Keep the tag {tag} on every test."
     )

@@ -225,3 +225,26 @@ def test_cli_close_ignores_other_branches_and_dry_runs_by_default(
     assert "isn't a Storywright branch" in err
     assert "KAN-1: comment the merge (c3b7149), move to 'Done'" in err
     assert "dry run" in err
+
+
+def test_a_ui_run_publishes_its_test_and_the_page_objects_it_extended(tmp_path: Path) -> None:
+    origin, clone = _repos(tmp_path)
+    out = _handover(tmp_path / "out")
+    log = json.loads((out / "storywright-log.json").read_text())
+    log |= {
+        "kind": "ui",
+        "test_file": "e2e/ui/generated/KAN-1.spec.ts",
+        "extra_files": {"e2e/fixtures/pages.ts": "pages.ts"},
+    }
+    (out / "storywright-log.json").write_text(json.dumps(log))
+    (out / "pages.ts").write_text("export class VendorPage {}\n")
+    gh = FakeGh()
+    p = plan(Handover.load(out, "KAN-1"), "Members see their notes", TEST_DIR)
+
+    publish(clone, p, "main", _jira([]), run=gh)
+
+    changed = run_command(["git", "diff", "--name-only", "main", "storywright/kan-1"], origin)
+    assert changed.splitlines() == ["e2e/fixtures/pages.ts", "e2e/ui/generated/KAN-1.spec.ts"]
+    [pr] = gh.calls
+    assert pr[pr.index("--title") + 1].startswith("test(ui): KAN-1")
+    assert "Also extends `e2e/fixtures/pages.ts`" in pr[pr.index("--body") + 1]

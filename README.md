@@ -1,6 +1,6 @@
 # Storywright
 
-An agent that turns a user story into Playwright API tests and proves they work: it reads the repo, writes the tests, runs them against the real app, reads what failed, and repairs them, without weakening an assertion to get a pass. Built on LangGraph, with every model call going through the Anthropic SDK.
+An agent that turns a user story into Playwright tests, API or UI, that follow the repo's own testing standard, and proves they work: it reads the repo, writes the tests, runs them against the real app, reads what failed, and repairs them, without weakening an assertion to get a pass. Built on LangGraph, with every model call going through the Anthropic SDK.
 
 ## Results
 
@@ -34,13 +34,17 @@ write ──> verify ──green──> passing
 
 | Step | What happens |
 |---|---|
-| **write** | Claude gets the scenario plus repo context (OpenAPI document, test fixtures, an example spec) and may read more of the repo with tools. Returns typed JSON: `{approach, code}`. |
-| **verify** | Deterministic. Type-checks the repo's tests, starts the app on a free port with a fresh database, runs the file, and collects each failing test's first error lines. |
+| **write** | Claude gets the scenario plus repo context: the repo's test guide (`AGENTS.md`), fixtures, data factory, page objects, the OpenAPI document, and an example spec of each kind. It may read more of the repo with tools. It picks API or UI and returns typed JSON: `{kind, approach, code}`, plus a new page-object module when a UI test needs entries it doesn't have yet. |
+| **verify** | Deterministic. Type-checks the test and lints it with the repo's own rules (when the repo has adopted them). It then starts what that kind needs on free ports with a fresh database (the API, or the API plus the web app for UI tests), runs the file, and collects each failing test's first error lines. A lint error fails the run like a failed assertion. |
 | **repair** | Claude gets the failures, may use the same tools, and returns `{diagnosis, reason, code}`, where `diagnosis` is `test_bug`, `app_defect` (the app contradicts the scenario), or `environment` (nothing could run). |
-| **guard** | Deterministic check on every repair. A repair that drops the task tag or cuts the number of assertions is rejected and retried without running it. |
+| **guard** | Deterministic check on every repair. A repair that drops the task tag or cuts the number of assertions is rejected and retried without running it, and so is a page-object edit that changes or removes an existing line: other tests depend on them, so additions only. |
 | **stop** | After green, a defect report, an environment failure, 3 repairs, or the per-task budget. |
 
 **Repo tools** (`list_files`, `read_file`, `search`) are read-only and confined to the repo. They never touch dependencies, caches, `.git`, or runtime data, and paths that escape the repo are refused. Each model call may make up to 12 tool calls. Past that, every call returns an error asking for an answer, and a model that still keeps calling tools ends the run. v0.2 averaged 3.1 tool calls per trial.
+
+**API and UI tests.** Storywright picks the kind from the story: API for behavior of the HTTP API, UI for what a person sees and does in the browser. `--kind api` or `--kind ui` overrides that, and agent-eval-gate runs always use API, since that's what the benchmark scores. Both kinds follow the repo's [testing standard](https://github.com/dholman7/agent-dev-skills/blob/main/plugins/agent-dev-skills/skills/playwright-testing/SKILL.md): set up data through the factory, use page objects, put no credentials in specs. Because the repo's lint runs on every attempt, a test that breaks a lint-enforced rule never comes back green. A UI test that needs a locator the page objects lack adds it to the page-object module rather than writing it inline, and `publish` puts both files in the PR.
+
+First UI run, on a story the suite didn't cover ("filter the vendor list by status"): Storywright chose UI and set up a draft vendor and an in-review vendor through the factory. It added a `statusFilter` entry and a `filterByStatus()` method to the vendor list's page object, and passed on the first verify, in 46 seconds for $0.0094 on Haiku. With the list changed to ignore the filter, the test fails on the draft vendor still being visible.
 
 **MCP tools.** Any MCP server can be attached over stdio with `--mcp-server NAME=COMMAND`, and its tools are offered next to the repo tools as `mcp__NAME__tool`. A server receives only the environment variables named with `--mcp-env`, plus the SDK's safe defaults like `PATH`. A CI server can get a GitHub token without ever seeing the Anthropic key. For example, attaching [ci-context-mcp](https://github.com/dholman7/ci-context-mcp) lets the agent read failed CI runs:
 
@@ -91,6 +95,7 @@ Failure handling, in order of how often it came up:
 uv sync
 export ANTHROPIC_API_KEY=...
 storywright run --repo ../vendor-intake-app --story story.feature --task-id VEN-01
+storywright run --repo ../vendor-intake-app --jira KAN-7 --kind ui    # or api; default: auto
 ```
 
 Through agent-eval-gate:
@@ -106,7 +111,7 @@ uv run aeg run --agent storywright --command "uv run --project ../storywright st
 | `dev` (default) | `claude-haiku-5-5`, low | Iterating; 3 trials over the held-out split cost about 17 cents |
 | `report` | `claude-opus-5-5`, medium | Comparison runs, with server-side refusal fallback on |
 
-`--max-repairs` (default 3) and `--budget-usd` (default $1.00 per task) bound every run. How to start the app and run tests comes from a config file; [`configs/vendor-intake.yaml`](configs/vendor-intake.yaml) is the one for the benchmark's target.
+`--max-repairs` (default 3) and `--budget-usd` (default $1.00 per task) bound every run. What to start and how to run each kind of test comes from a config file: services (here the API and the Next.js web app, each on its own port), test kinds, and the lint command. [`configs/vendor-intake.yaml`](configs/vendor-intake.yaml) is the one for vendor-intake-app. Files a repo doesn't have yet, such as `AGENTS.md` at an older benchmark commit, are skipped.
 
 ## Not in v1
 

@@ -18,7 +18,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from storywright import prompts
-from storywright.guards import weakening
+from storywright.guards import changed_shared_code, weakening
 from storywright.llm import LLM, LLMError
 from storywright.repo import Verification
 
@@ -29,7 +29,10 @@ class State(TypedDict, total=False):
     task_id: str
     story: str
     tag: str
+    kind: str
     code: str
+    # Proposed page-object module; empty when the test needs no new entries.
+    page_objects: str
     repairs: int
     verification: dict[str, Any]
     rejected: str | None
@@ -39,7 +42,7 @@ class State(TypedDict, total=False):
     log: Annotated[list[str], operator.add]
 
 
-Verifier = Callable[[str, str], Verification]  # (task_id, code) -> result
+Verifier = Callable[[State], Verification]  # writes the state's files and runs them
 
 
 class Node(Protocol):
@@ -51,6 +54,8 @@ def _report(v: Verification) -> str:
     parts = []
     if not v.typechecks:
         parts.append("Type errors:\n" + "\n".join(v.typecheck_errors))
+    if v.lint_errors:
+        parts.append("Lint errors (rule IDs are in AGENTS.md):\n" + "\n".join(v.lint_errors))
     if v.errors:
         parts.append("Run errors:\n" + "\n".join(v.errors))
     if v.failures:
@@ -63,30 +68,54 @@ def _report(v: Verification) -> str:
 def build(
     llm: LLM,
     context: str,
-    test_dir: str,
+    test_dirs: dict[str, str],
     verifier: Verifier,
     *,
+    page_objects: tuple[str, str] | None = None,
     max_repairs: int = 3,
     budget_usd: float = 1.00,
 ) -> CompiledStateGraph[State, None, State, State]:
+    """`test_dirs` maps each allowed kind to its directory. `page_objects` is (path, current
+    content) when the run may extend the page-object module."""
+    editable = page_objects is not None
+
+    def pages_problem(state: State, proposed: str) -> str | None:
+        return changed_shared_code(page_objects[1], proposed) if page_objects and proposed else None
+
     def write(state: State) -> State:
-        path = f"{test_dir}/{state['task_id']}.spec.ts"
+        paths = {kind: f"{d}/{state['task_id']}.spec.ts" for kind, d in test_dirs.items()}
         try:
             data = llm.call(
                 prompts.SYSTEM,
                 context,
-                prompts.write_prompt(state["story"], path, state["tag"]),
-                prompts.WRITE_SCHEMA,
+                prompts.write_prompt(
+                    state["story"], paths, state["tag"], page_objects[0] if page_objects else None
+                ),
+                prompts.write_schema(list(test_dirs), editable),
             )
         except LLMError as exc:
             return {"verdict": "agent_error", "reason": str(exc), "log": [f"write failed: {exc}"]}
-        return {"code": data["code"], "repairs": 0, "log": [f"plan: {data['approach']}"]}
+        pages = data.get("page_objects", "")
+        problem = pages_problem(state, pages)
+        log = [f"kind: {data['kind']}", f"plan: {data['approach']}"]
+        if problem:
+            # Keep the test; drop the page-object edit and let verify report what breaks.
+            pages, log = "", [*log, f"page-object edit rejected: {problem}"]
+        return {
+            "kind": data["kind"],
+            "code": data["code"],
+            "page_objects": pages,
+            "repairs": 0,
+            "log": log,
+        }
 
     def verify(state: State) -> State:
-        result = verifier(state["task_id"], state["code"])
+        result = verifier(state)
         summary = f"verify: {result.passed} passed, {result.failed} failed"
         if not result.typechecks:
             summary += ", type errors"
+        if result.lint_errors:
+            summary += f", {len(result.lint_errors)} lint errors"
         if result.errors:
             summary += ", run errors"
         return {"verification": result.model_dump(), "rejected": None, "log": [summary]}
@@ -94,10 +123,15 @@ def build(
     def repair(state: State) -> State:
         result = Verification.model_validate(state["verification"])
         prompt = prompts.repair_prompt(
-            state["story"], state["code"], _report(result), state["tag"], state.get("rejected")
+            state["story"],
+            state["code"],
+            _report(result),
+            state["tag"],
+            state.get("rejected"),
+            state.get("page_objects", ""),
         )
         try:
-            data = llm.call(prompts.SYSTEM, context, prompt, prompts.REPAIR_SCHEMA)
+            data = llm.call(prompts.SYSTEM, context, prompt, prompts.repair_schema(editable))
         except LLMError as exc:
             return {"verdict": "agent_error", "reason": str(exc), "log": [f"repair failed: {exc}"]}
         repairs = state["repairs"] + 1
@@ -109,7 +143,10 @@ def build(
                 "repairs": repairs,
                 "log": [f"repair {repairs}: {diagnosis}: {data['reason']}"],
             }
-        violation = weakening(state["code"], data["code"], state["tag"])
+        pages = data.get("page_objects", "") or state.get("page_objects", "")
+        violation = weakening(state["code"], data["code"], state["tag"]) or pages_problem(
+            state, pages
+        )
         if violation:
             return {
                 "repairs": repairs,
@@ -118,6 +155,7 @@ def build(
             }
         return {
             "code": data["code"],
+            "page_objects": pages,
             "repairs": repairs,
             # Clear any earlier rejection, or routing would treat this accepted repair as rejected.
             "rejected": None,

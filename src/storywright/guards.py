@@ -1,5 +1,6 @@
 """Deterministic checks on model output. The model proposes; these decide what is allowed."""
 
+import difflib
 import re
 
 _EXPECT = re.compile(r"\bexpect(?:\.poll|\.soft)?\s*\(")
@@ -22,4 +23,20 @@ def weakening(before: str, after: str, tag: str) -> str | None:
         return (
             f"the repair cut assertions from {assertion_count(before)} to {assertion_count(after)}"
         )
+    return None
+
+
+def changed_shared_code(before: str, after: str) -> str | None:
+    """Why an edit to a shared module (the page objects) is rejected, or None if it only adds.
+
+    Other specs depend on every existing line, so a generated test may extend the module but
+    never change or remove what is there.
+    """
+    old, new = before.splitlines(), after.splitlines()
+    for tag, i1, i2, _, _ in difflib.SequenceMatcher(a=old, b=new, autojunk=False).get_opcodes():
+        if tag in ("delete", "replace"):
+            return (
+                f"the page-object edit changed or removed existing lines {i1 + 1}-{i2}; "
+                "only additions are allowed"
+            )
     return None
