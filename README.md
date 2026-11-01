@@ -15,6 +15,10 @@ The intervals are far apart: the loop is better than a single call by a wide, me
 
 On the `report` profile (Claude Opus 5.5, medium effort, 1 trial per task), v0.2 succeeded on all 20 held-out tasks and caught all 24 seeded bugs, with no test file failing on correct code. That run cost $0.091 per task, $1.81 in total. Haiku gets within a few points of that for about 3% of the cost, so the cheap profile is the default.
 
+**v0.3 writes UI tests too, at no cost to API results.** On the same held-out split it matches v0.2 exactly (58/60, with both misses REV-03, the known spec defect) at $0.0025 per trial. On agent-eval-gate's [UI benchmark](https://github.com/dholman7/agent-eval-gate#ui-benchmark), where bugs are seeded in the web app, it succeeded on all 18 held-out trials (6 tasks, CI 82–100%) and caught all 18 bugs, at $0.0045 per trial.
+
+That API result was measured, not assumed. v0.3's first held-out run scored 55/60. Rewriting the prompt for UI tests had moved the "show the response body on status assertions" rule into the repo's `AGENTS.md`, and the benchmark's app commit predates that file. Bare status checks came back, and on a 422 the model blamed the app three times. Restoring the rule for every repo brought it back to 58/60, and a regression test keeps it in the prompt.
+
 **A note on fairness.** The prompts were tuned on the dev split. v0.1 was then scored once on held-out (19/20 tasks, 1 trial). v0.2 added the repo tools after that score was seen, to fix a failure it exposed, so v0.2's held-out numbers come from fresh trials but aren't a blind result.
 
 ### What still goes wrong
