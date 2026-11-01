@@ -196,3 +196,12 @@ def test_lint_errors_block_green_and_reach_the_repair() -> None:
 
     assert final["verdict"] == "passing" and final["repairs"] == 1
     assert "Lint errors" in llm.prompts[1] and "PW-4" in llm.prompts[1]
+
+
+def test_the_system_prompt_requires_the_body_on_status_assertions_without_a_repo_guide() -> None:
+    # Regression: v0.3 dropped this rule, relying on the repo's AGENTS.md. Against an app commit
+    # with no guide, bare status checks came back, and the model blamed the app for its own 422s.
+    from storywright import prompts
+
+    assert "every status assertion shows" in prompts.SYSTEM
+    assert "await res.text()" in prompts.SYSTEM

@@ -24,6 +24,10 @@ How to write tests here:
   app must parse (an uploaded document, a date, an identifier), look up the format it expects.
 - Some work happens in the background after a request returns. Wait for it with expect.poll or
   a web-first assertion instead of assuming it is immediate.
+- Make failures explain themselves, in every repo, guide or not: every status assertion shows
+  the response body, through the repo's helper if it has one (such as expectStatus), otherwise
+  as the message, e.g. expect(res.status(), await res.text()).toBe(201). A bare "expected 201,
+  received 422" hides why the app refused, and invites blaming the app for the test's request.
 
 The rule that matters most: the scenario is the specification. Never weaken an assertion,
 delete a check, or change an expected value away from what the scenario says in order to make
