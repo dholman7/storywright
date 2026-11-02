@@ -50,9 +50,9 @@ def test_lint_runs_only_once_the_repo_has_adopted_the_rules(tmp_path: Path) -> N
     )
     spec = tmp_path / "a.spec.ts"
 
-    before = _lint(tmp_path, tests, spec)
+    before = _lint(tmp_path, tests, [spec])
     (tmp_path / "eslint.config.mjs").write_text("export default []")
-    after = _lint(tmp_path, tests, spec)
+    after = _lint(tmp_path, tests, [spec])
 
     assert before == []
     assert after == ["line 4: PW-4: no passwords"]  # warnings don't block
@@ -153,3 +153,26 @@ def test_bad_responses_raise_llm_error(text: str, stop_reason: str, message: str
     claude = llm_module.Claude(_client(text, "claude-haiku-5-5", stop_reason))
     with pytest.raises(llm_module.LLMError, match=message):
         claude.call("s", "c", "p", {"type": "object"})
+
+
+def test_lint_covers_every_file_given_and_names_each(tmp_path: Path) -> None:
+    reports = [
+        {"filePath": str(tmp_path / "a.spec.ts"), "messages": []},
+        {
+            "filePath": str(tmp_path / "pages.ts"),
+            "messages": [{"line": 7, "message": "PW-14: exact", "severity": 2}],
+        },
+    ]
+    seen = tmp_path / "args.txt"
+    tests = LintSettings(
+        cwd=".",
+        typecheck="true",
+        lint=f"echo {{path}} > {seen} && echo '{json.dumps(reports)}'",
+        lint_if="eslint.config.mjs",
+    )
+    (tmp_path / "eslint.config.mjs").write_text("export default []")
+
+    errors = _lint(tmp_path, tests, [tmp_path / "a.spec.ts", tmp_path / "pages.ts"])
+
+    assert seen.read_text().split() == ["a.spec.ts", "pages.ts"]
+    assert errors == ["pages.ts line 7: PW-14: exact"]

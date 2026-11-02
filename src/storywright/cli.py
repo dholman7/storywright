@@ -59,11 +59,13 @@ def solve(
         path = agent_graph.test_path(repo, config.kinds[kind].test_dir, state["task_id"])
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(state["code"])
-        if pages_file and state.get("page_objects"):
+        extended = bool(pages_file and state.get("page_objects"))
+        if pages_file and extended:
             pages_file.write_text(state["page_objects"])
         else:
             restore_pages()
-        return verify(repo, config, kind, path)
+        # Lint the page objects too when this run added to them: its new locators live there.
+        return verify(repo, config, kind, path, [pages_file] if pages_file and extended else None)
 
     context = prompts.render_context(read_context(repo, config, kinds))
     compiled = agent_graph.build(

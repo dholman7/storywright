@@ -19,6 +19,9 @@ How to write tests here:
   page-object entry, add one to the page-object module (you may return its full new content),
   using a role, label, or text locator. Only add to that module: never change or remove what is
   there, because other tests depend on it.
+- Match a control's name exactly: getByRole("button", { name: "Next", exact: true }). Names match
+  by substring by default, and dev servers add their own controls: under `next dev`, "Next" also
+  matches Next.js's "Open Next.js Dev Tools" button.
 - Tests share one database and run in parallel. Give everything you create a unique name.
 - You can read the repository with list_files, read_file, and search. Before inventing data the
   app must parse (an uploaded document, a date, an identifier), look up the format it expects.

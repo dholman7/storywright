@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -198,13 +199,14 @@ def parse_report(report: dict[str, Any], verification: Verification) -> None:
         walk(suite)
 
 
-def _lint(tests_cwd: Path, config: TestsConfig, test_file: Path) -> list[str]:
+def _lint(tests_cwd: Path, config: TestsConfig, files: list[Path]) -> list[str]:
+    """Lint errors in `files`, each prefixed with its file name when there is more than one."""
     if not (config.lint and config.lint_if and (tests_cwd / config.lint_if).is_file()):
         return []
-    path = os.path.relpath(test_file, tests_cwd)
+    paths = " ".join(shlex.quote(os.path.relpath(f, tests_cwd)) for f in files)
     result = subprocess.run(
         # replace, not format: a command may contain other braces (JSON, ${VAR}).
-        config.lint.replace("{path}", path),
+        config.lint.replace("{path}", paths),
         shell=True,
         cwd=tests_cwd,
         capture_output=True,
@@ -214,16 +216,21 @@ def _lint(tests_cwd: Path, config: TestsConfig, test_file: Path) -> list[str]:
         reports = json.loads(result.stdout)
     except json.JSONDecodeError:
         return [] if result.returncode == 0 else [(result.stderr or result.stdout)[-400:]]
+    named = len(files) > 1
     return [
-        f"line {m.get('line', '?')}: {m.get('message', '')}"
-        for report in reports
-        for m in report.get("messages", [])
+        (f"{Path(r.get('filePath', '')).name} " if named else "")
+        + f"line {m.get('line', '?')}: {m.get('message', '')}"
+        for r in reports
+        for m in r.get("messages", [])
         if m.get("severity", 2) >= 2
     ][:15]
 
 
-def verify(repo: Path, config: RepoConfig, kind: str, test_file: Path) -> Verification:
-    """Type-checks and lints the test file, then runs it against freshly started services."""
+def verify(
+    repo: Path, config: RepoConfig, kind: str, test_file: Path, lint_also: list[Path] | None = None
+) -> Verification:
+    """Type-checks and lints the test file (plus `lint_also`, such as page objects the run
+    extended), then runs it against freshly started services."""
     tests_cwd = repo / config.tests.cwd
     check = subprocess.run(
         config.tests.typecheck, shell=True, cwd=tests_cwd, capture_output=True, text=True
@@ -236,7 +243,7 @@ def verify(repo: Path, config: RepoConfig, kind: str, test_file: Path) -> Verifi
     verification = Verification(
         typechecks=not ours,
         typecheck_errors=ours[:10],
-        lint_errors=_lint(tests_cwd, config.tests, test_file),
+        lint_errors=_lint(tests_cwd, config.tests, [test_file, *(lint_also or [])]),
     )
     spec = config.kinds[kind]
     try:
