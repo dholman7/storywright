@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -176,3 +177,14 @@ def test_lint_covers_every_file_given_and_names_each(tmp_path: Path) -> None:
 
     assert seen.read_text().split() == ["a.spec.ts", "pages.ts"]
     assert errors == ["pages.ts line 7: PW-14: exact"]
+
+
+def test_a_hung_command_times_out_with_its_children_killed(tmp_path: Path) -> None:
+    from storywright.repo import CommandTimeout, _shell
+
+    # `sleep` holds the pipe; killing only the shell would leave communicate() waiting on it.
+    started = time.monotonic()
+    with pytest.raises(CommandTimeout, match=r"timed out after 0\.5s"):
+        _shell("sleep 30 | cat", tmp_path, 0.5)
+    assert time.monotonic() - started < 5
+    assert _shell("echo ok", tmp_path, 5).stdout == "ok\n"

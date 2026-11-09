@@ -49,6 +49,8 @@ class TestsConfig(BaseModel):
     lint: str | None = None
     lint_if: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    # Limit for each type-check, lint, and test run, so a hung runner can't outlast the budget.
+    timeout_s: float = 300
 
 
 class RepoConfig(BaseModel):
@@ -199,19 +201,44 @@ def parse_report(report: dict[str, Any], verification: Verification) -> None:
         walk(suite)
 
 
+class CommandTimeout(Exception):
+    pass
+
+
+def _shell(
+    command: str, cwd: Path, timeout_s: float, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Runs a shell command in its own process group. On timeout, kills the whole group: killing
+    only the shell would leave a test runner holding the pipes, and the wait would hang."""
+    with subprocess.Popen(
+        command,
+        shell=True,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise CommandTimeout(f"timed out after {timeout_s:g}s: {command[:80]}") from None
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def _lint(tests_cwd: Path, config: TestsConfig, files: list[Path]) -> list[str]:
     """Lint errors in `files`, each prefixed with its file name when there is more than one."""
     if not (config.lint and config.lint_if and (tests_cwd / config.lint_if).is_file()):
         return []
     paths = " ".join(shlex.quote(os.path.relpath(f, tests_cwd)) for f in files)
-    result = subprocess.run(
+    try:
         # replace, not format: a command may contain other braces (JSON, ${VAR}).
-        config.lint.replace("{path}", paths),
-        shell=True,
-        cwd=tests_cwd,
-        capture_output=True,
-        text=True,
-    )
+        result = _shell(config.lint.replace("{path}", paths), tests_cwd, config.timeout_s)
+    except CommandTimeout as exc:
+        return [f"lint {exc}"]
     try:
         reports = json.loads(result.stdout)
     except json.JSONDecodeError:
@@ -232,14 +259,16 @@ def verify(
     """Type-checks and lints the test file (plus `lint_also`, such as page objects the run
     extended), then runs it against freshly started services."""
     tests_cwd = repo / config.tests.cwd
-    check = subprocess.run(
-        config.tests.typecheck, shell=True, cwd=tests_cwd, capture_output=True, text=True
-    )
+    timeout_s = config.tests.timeout_s
     # Only errors in our files count; the rest of the repo isn't ours to fix.
     ours_names = {test_file.name} | (
         {Path(config.page_objects).name} if config.page_objects else set()
     )
-    ours = [ln for ln in check.stdout.splitlines() if any(n in ln for n in ours_names)]
+    try:
+        check = _shell(config.tests.typecheck, tests_cwd, timeout_s)
+        ours = [ln for ln in check.stdout.splitlines() if any(n in ln for n in ours_names)]
+    except CommandTimeout as exc:
+        ours = [f"type-check {exc}"]
     verification = Verification(
         typechecks=not ours,
         typecheck_errors=ours[:10],
@@ -248,16 +277,17 @@ def verify(
     spec = config.kinds[kind]
     try:
         with running_services(repo, config, spec.services) as values:
-            result = subprocess.run(
+            result = _shell(
                 spec.run.format(path=os.path.relpath(test_file, tests_cwd)),
-                shell=True,
-                cwd=tests_cwd,
-                env=_env(config.tests.env, values),
-                capture_output=True,
-                text=True,
+                tests_cwd,
+                timeout_s,
+                _env(config.tests.env, values),
             )
     except AppStartError as exc:
         verification.errors.append(f"app did not start: {exc}")
+        return verification
+    except CommandTimeout as exc:
+        verification.errors.append(f"test run {exc}")
         return verification
     try:
         parse_report(json.loads(result.stdout), verification)

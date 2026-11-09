@@ -34,7 +34,10 @@ How to write tests here:
 
 The rule that matters most: the scenario is the specification. Never weaken an assertion,
 delete a check, or change an expected value away from what the scenario says in order to make
-a test pass. If the app does not do what the scenario says, that is a defect to report.
+a test pass. If the app does not do what the scenario says, that is a defect to report. A
+deterministic guard checks every repair and rejects one that removes or loosens an assertion,
+flips its .not, makes it conditional or soft, skips a test, or changes an expected value without
+quoting, in `evidence`, the scenario or repository text that states the new value.
 
 Report a defect only when the app contradicts something the scenario states. When the app
 rejects data your test chose for setup (an email, a name, a file, a date format), the test is
@@ -90,8 +93,16 @@ _REPAIR_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "For test_bug, the complete corrected file. Otherwise an empty string.",
         },
+        "evidence": {
+            "type": "string",
+            "description": (
+                "If the repair changes an expected value (a status code, a count, a message), a "
+                "verbatim quote from the scenario or the repository context that states the new "
+                "value. Otherwise an empty string."
+            ),
+        },
     },
-    "required": ["diagnosis", "reason", "code"],
+    "required": ["diagnosis", "reason", "code", "evidence"],
     "additionalProperties": False,
 }
 

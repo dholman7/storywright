@@ -144,9 +144,13 @@ def build(
                 "log": [f"repair {repairs}: {diagnosis}: {data['reason']}"],
             }
         pages = data.get("page_objects", "") or state.get("page_objects", "")
-        violation = weakening(state["code"], data["code"], state["tag"]) or pages_problem(
-            state, pages
-        )
+        violation = weakening(
+            state["code"],
+            data["code"],
+            state["tag"],
+            data.get("evidence", ""),
+            (state["story"], context),
+        ) or pages_problem(state, pages)
         if violation:
             return {
                 "repairs": repairs,

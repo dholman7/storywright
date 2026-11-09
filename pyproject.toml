@@ -1,7 +1,7 @@
 [project]
 name = "storywright"
 version = "0.1.0"
-description = "LangGraph + Claude agent that turns user stories into verified Playwright API tests"
+description = "LangGraph + Claude agent that turns user stories into verified Playwright API and UI tests"
 license = "MIT"
 requires-python = ">=3.13"
 dependencies = [
@@ -12,6 +12,9 @@ dependencies = [
     "pyyaml>=6.0.2",
     "mcp>=2.3,<3",
     "httpx>=0.28",
+    # Parses tests for the repair guard. 0.26.1 shipped 2026-11-09; adopt it after two weeks.
+    "tree-sitter>=0.26.0,<0.26.1",
+    "tree-sitter-typescript>=0.23.2,<0.24",
 ]
 
 [project.scripts]

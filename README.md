@@ -1,6 +1,6 @@
 # Storywright
 
-An agent that turns a user story into Playwright tests, API or UI, that follow the repo's own testing standard, and proves they work: it reads the repo, writes the tests, runs them against the real app, reads what failed, and repairs them. A deterministic guard rejects any repair that drops the task's test or cuts its assertions, so a red test can't be "fixed" by testing less. Built on LangGraph, with every model call going through the Anthropic SDK.
+An agent that turns a user story into Playwright tests, API or UI, that follow the repo's own testing standard, and proves they work: it reads the repo, writes the tests, runs them against the real app, reads what failed, and repairs them. A deterministic guard parses every repair and rejects one that tests less (cuts, loosens, flips, skips, or hedges an assertion, or changes an expected value without quoting its source), so a red test can't be "fixed" by testing less. Built on LangGraph, with every model call going through the Anthropic SDK.
 
 ## Results
 
@@ -40,9 +40,28 @@ write ──> verify ──green──> passing
 |---|---|
 | **write** | Claude gets the scenario plus repo context: the repo's test guide (`AGENTS.md`), fixtures, data factory, page objects, the OpenAPI document, and an example spec of each kind. It may read more of the repo with tools. It picks API or UI and returns typed JSON: `{kind, approach, code}`, plus a new page-object module when a UI test needs entries it doesn't have yet. |
 | **verify** | Deterministic. Type-checks the test and lints it with the repo's own rules (when the repo has adopted them). It then starts what that kind needs on free ports with a fresh database (the API, or the API plus the web app for UI tests), runs the file, and collects each failing test's first error lines. A lint error fails the run like a failed assertion. |
-| **repair** | Claude gets the failures, may use the same tools, and returns `{diagnosis, reason, code}`, where `diagnosis` is `test_bug`, `app_defect` (the app contradicts the scenario), or `environment` (nothing could run). |
-| **guard** | Deterministic check on every repair. A repair that drops the task tag or cuts the number of assertions is rejected and retried without running it, and so is a page-object edit that changes or removes an existing line: other tests depend on them, so additions only. |
+| **repair** | Claude gets the failures, may use the same tools, and returns `{diagnosis, reason, code, evidence}`, where `diagnosis` is `test_bug`, `app_defect` (the app contradicts the scenario), or `environment` (nothing could run), and `evidence` quotes where any changed expected value comes from. |
+| **guard** | Deterministic check on every repair. It parses the test before and after and rejects a repair that tests less (below), which is then retried without running it. A page-object edit that changes or removes an existing line is rejected too: other tests depend on them, so additions only. |
 | **stop** | After green, a defect report, an environment failure, 3 repairs, or the per-task budget. |
+
+**The repair guard.** A red test is easy to turn green by testing less, so the guard compares what each test asserts before and after a repair, using a TypeScript parse (tree-sitter), not text matching. Assertions are `expect(...)`, `expect.soft`, `expect.poll`, and repo helpers named `expect*`, such as `expectStatus`. [`tests/test_guards.py`](tests/test_guards.py) holds the matrix, and CI runs it:
+
+| Rejected (30 probes) | Allowed (13 probes) |
+|---|---|
+| Deleting an assertion, or leaving `expect(x)` with no matcher | Fixing setup data and payloads, replacing a fixed wait with a web-first assertion |
+| Dropping the tag, renaming it (`@KAN-4` → `@KAN-41`), or moving it into a comment | Adding assertions |
+| Loosening a matcher: `toBe` → `toBeTruthy`/`toContain`, `toHaveLength` → `toBeDefined`/`not.toBeNull`, exact text → regex | Tightening one (`toBeTruthy` → `toBe`, `toContain("a")` → `toBe("ab")`) |
+| Swapping in a looser check on a different subject (`toHaveLength(1)` → `length > 0`) | Renaming variables, changing locators, reordering or reformatting tests |
+| Adding or removing `.not` | Adding a message to an assertion |
+| Wrapping an assertion in `try`/`catch`, `if`, `&&`, or `.catch()` | Correcting an expected value with a quote of the scenario or the repo that states it |
+| `test.skip`/`fixme`/`fail`/`only`, or a skip inside the body | Expecting back a string the test's own setup sent |
+| `expect` → `expect.soft`, or asserting on a constant | |
+| Changing an expected value (a status, a message) without evidence, with a quote not found in the scenario or repo context, or with one too short to mean anything | |
+| "Tightening" to a different value (`toContain("validation")` → `toBe("ok")`) | |
+
+Checked live on the dev split (Haiku, 3 trials, 36 runs), the stricter guard rejected 0 of 25 repairs, and success held at 36/36. agent-eval-gate's paired gate against v0.2's dev run shows no change (p = 1.0). So it costs nothing on honest repairs. None of those 25 repairs tried to weaken a test, though, so the probe matrix is the evidence for what it catches.
+
+The guard is a heuristic. It can't tell whether a new subject (`expect(a)` → `expect(b)`) checks the same behavior. It counts on the model's quote being relevant, not just present. And a file that doesn't parse falls back to the old tag-and-count check, since verify will fail it anyway.
 
 **Repo tools** (`list_files`, `read_file`, `search`) are read-only and confined to the repo. They never touch dependencies, caches, `.git`, or runtime data, and paths that escape the repo are refused. Each model call may make up to 12 tool calls. Past that, every call returns an error asking for an answer, and a model that still keeps calling tools ends the run. v0.2 averaged 3.1 tool calls per trial.
 
