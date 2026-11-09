@@ -1,6 +1,6 @@
 # Storywright
 
-An agent that turns a user story into Playwright tests, API or UI, that follow the repo's own testing standard, and proves they work: it reads the repo, writes the tests, runs them against the real app, reads what failed, and repairs them, without weakening an assertion to get a pass. Built on LangGraph, with every model call going through the Anthropic SDK.
+An agent that turns a user story into Playwright tests, API or UI, that follow the repo's own testing standard, and proves they work: it reads the repo, writes the tests, runs them against the real app, reads what failed, and repairs them. A deterministic guard rejects any repair that drops the task's test or cuts its assertions, so a red test can't be "fixed" by testing less. Built on LangGraph, with every model call going through the Anthropic SDK.
 
 ## Results
 
