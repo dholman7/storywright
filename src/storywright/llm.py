@@ -34,8 +34,11 @@ PRICES: dict[str, tuple[float, float, float, float]] = {
 
 @dataclass
 class Spend:
+    # All input, cached or not; the cache counts below are the part of it served or written.
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     cost_usd: float = 0.0
     models: set[str] = field(default_factory=set)
 
@@ -44,6 +47,8 @@ class Spend:
         cache_write = getattr(usage, "cache_creation_input_tokens", None) or 0
         cache_read = getattr(usage, "cache_read_input_tokens", None) or 0
         self.input_tokens += usage.input_tokens + cache_write + cache_read
+        self.cache_read_tokens += cache_read
+        self.cache_write_tokens += cache_write
         self.output_tokens += usage.output_tokens
         self.cost_usd += (
             usage.input_tokens * price[0]

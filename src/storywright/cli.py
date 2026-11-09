@@ -104,6 +104,8 @@ def solve(
             {
                 "input_tokens": llm.spend.input_tokens,
                 "output_tokens": llm.spend.output_tokens,
+                "cache_read_input_tokens": llm.spend.cache_read_tokens,
+                "cache_write_input_tokens": llm.spend.cache_write_tokens,
                 "cost_usd": round(llm.spend.cost_usd, 6),
                 "model": ",".join(sorted(llm.spend.models)) or llm.model,
             }

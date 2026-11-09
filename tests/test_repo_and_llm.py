@@ -129,6 +129,8 @@ def test_dev_profile_uses_haiku_without_fallback_and_caches_context() -> None:
     assert call["output_config"]["format"]["type"] == "json_schema"
     # 1000 input + 500 output + 8000 cache-write tokens at Haiku 5.5 rates.
     assert claude.spend.cost_usd == pytest.approx((1000 * 0.10 + 500 * 0.50 + 8000 * 0.125) / 1e6)
+    assert (claude.spend.input_tokens, claude.spend.cache_write_tokens) == (9000, 8000)
+    assert claude.spend.cache_read_tokens == 0
 
 
 def test_report_profile_uses_opus_with_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
