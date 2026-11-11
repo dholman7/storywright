@@ -15,9 +15,10 @@ from pathlib import Path
 
 from storywright import graph as agent_graph
 from storywright import prompts
+from storywright.claude_code import ClaudeCode
 from storywright.jira import JiraClient, JiraError, JiraWriter
 from storywright.llm import Claude
-from storywright.mcp_tools import McpTools, ServerSpec, connect
+from storywright.mcp_tools import ServerSpec, connect
 from storywright.publish import Handover, PublishError, close, key_from_branch, plan, publish
 from storywright.repo import RepoConfig, Verification, read_context, verify
 from storywright.tools import Toolbox
@@ -36,7 +37,7 @@ def solve(
     kinds: list[str],
     max_repairs: int,
     budget_usd: float,
-    mcp: McpTools | None = None,
+    llm: Claude | ClaudeCode,
     support_dir: Path | None = None,
 ) -> agent_graph.State:
     """Writes and verifies tests for one story. `kinds` are the test kinds the model may choose.
@@ -44,7 +45,6 @@ def solve(
     Extended shared files (page objects) are handed over next to the test, or, with
     `support_dir` (agent-eval-gate's contract), under it at their path in the repo.
     """
-    llm = Claude(toolbox=Toolbox(repo), mcp=mcp)
     pages_file = repo / config.page_objects if config.page_objects else None
     original_pages = pages_file.read_text() if pages_file and pages_file.is_file() else None
     # UI tests may extend the page objects; API tests never need to.
@@ -192,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
     config = RepoConfig.load(args.config)
     if args.command == "publish":
         return _publish(args, config)
+    # api (the default, and CI's) bills ANTHROPIC_API_KEY; claude-code bills a Claude login.
+    transport = os.environ.get("STORYWRIGHT_TRANSPORT", "api")
+    if transport not in ("api", "claude-code"):
+        parser.error(f"STORYWRIGHT_TRANSPORT must be api or claude-code, got {transport!r}")
 
     if args.command == "aeg":
         task = json.loads(Path(os.environ["AEG_TASK"]).read_text())
@@ -217,9 +221,8 @@ def main(argv: list[str] | None = None) -> int:
         kinds = list(config.kinds) if args.kind == "auto" else [args.kind]
         support_dir = None
 
-    specs = [ServerSpec.parse(s, args.mcp_env) for s in args.mcp_server]
-    with connect(specs) as mcp:
-        final = solve(
+    def run(llm: Claude | ClaudeCode) -> agent_graph.State:
+        return solve(
             repo,
             config,
             task_id,
@@ -230,8 +233,15 @@ def main(argv: list[str] | None = None) -> int:
             support_dir=support_dir,
             max_repairs=args.max_repairs,
             budget_usd=args.budget_usd,
-            mcp=mcp,
+            llm=llm,
         )
+
+    if transport == "claude-code":
+        final = run(ClaudeCode(repo, mcp_servers=args.mcp_server, mcp_env=args.mcp_env))
+    else:
+        specs = [ServerSpec.parse(s, args.mcp_env) for s in args.mcp_server]
+        with connect(specs) as mcp:
+            final = run(Claude(toolbox=Toolbox(repo), mcp=mcp))
     for line in final.get("log", []):
         print(f"  {line}", file=sys.stderr)
     print(f"{task_id}: {final.get('verdict')}: {final.get('reason')}", file=sys.stderr)

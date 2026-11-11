@@ -136,6 +136,13 @@ uv run aeg run --agent storywright --command "uv run --project ../storywright st
 | `dev` (default) | `claude-haiku-5-5`, low | Iterating; 3 trials over the held-out split cost about 17 cents |
 | `report` | `claude-opus-5-5`, medium | Comparison runs, with server-side refusal fallback on |
 
+`STORYWRIGHT_TRANSPORT` picks who bills the calls:
+
+- **`api` (default, and what CI uses)** calls the Messages API with `ANTHROPIC_API_KEY`.
+- **`claude-code`** runs each call through headless Claude Code (`claude -p`) on a Claude subscription login, with no API key needed. Storywright strips `ANTHROPIC_API_KEY` from Claude Code's environment, turns off its built-in tools, settings and skills, and serves its own repo and MCP tools from [`tool_server.py`](src/storywright/tool_server.py), under the same per-call budget.
+
+  The run is the same agent with a few differences, listed in [`claude_code.py`](src/storywright/claude_code.py): a short Claude Code preamble, Claude Code's own cache breakpoints, no refusal fallback, and costs that are list-price estimates rather than billed amounts.
+
 `--max-repairs` (default 3) and `--budget-usd` (default $1.00 per task) bound every run. What to start and how to run each kind of test comes from a config file: services (here the API and the Next.js web app, each on its own port), test kinds, and the lint command. [`configs/vendor-intake.yaml`](configs/vendor-intake.yaml) is the one for vendor-intake-app. Files a repo doesn't have yet, such as `AGENTS.md` at an older benchmark commit, are skipped.
 
 ## Not in v1

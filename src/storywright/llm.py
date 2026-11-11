@@ -44,19 +44,33 @@ class Spend:
     models: set[str] = field(default_factory=set)
 
     def add(self, model: str, usage: Any) -> None:
-        price = PRICES.get(model) or PRICES[resolve()[0]]
         cache_write = getattr(usage, "cache_creation_input_tokens", None) or 0
         cache_read = getattr(usage, "cache_read_input_tokens", None) or 0
-        self.input_tokens += usage.input_tokens + cache_write + cache_read
+        self.add_tokens(model, usage.input_tokens, usage.output_tokens, cache_write, cache_read)
+
+    def add_tokens(
+        self,
+        model: str,
+        uncached: int,
+        output: int,
+        cache_write: int,
+        cache_read: int,
+        cost_usd: float | None = None,
+    ) -> None:
+        """`cost_usd` overrides the price table, for callers that know what the requests cost."""
+        self.input_tokens += uncached + cache_write + cache_read
         self.cache_read_tokens += cache_read
         self.cache_write_tokens += cache_write
-        self.output_tokens += usage.output_tokens
-        self.cost_usd += (
-            usage.input_tokens * price[0]
-            + usage.output_tokens * price[1]
-            + cache_write * price[2]
-            + cache_read * price[3]
-        ) / 1_000_000
+        self.output_tokens += output
+        if cost_usd is None:
+            price = PRICES.get(model) or PRICES[resolve()[0]]
+            cost_usd = (
+                uncached * price[0]
+                + output * price[1]
+                + cache_write * price[2]
+                + cache_read * price[3]
+            ) / 1_000_000
+        self.cost_usd += cost_usd
         self.models.add(model)
 
 
@@ -72,6 +86,47 @@ class LLM(Protocol):
     ) -> dict[str, Any]:
         """Returns JSON matching `schema`. `context` is cached across calls in one run."""
         ...
+
+
+BUDGET_USED_UP = "Tool budget used up. Answer now with what you have."
+
+
+class Tools:
+    """Repo and MCP tools offered to the model, with a budget of calls per `call()`."""
+
+    def __init__(
+        self, toolbox: Toolbox | None, mcp: "McpTools | None" = None, max_calls: int = 12
+    ) -> None:
+        self.toolbox = toolbox
+        self.mcp = mcp
+        self.max_calls = max_calls
+        self.remaining = max_calls
+        self.calls = 0  # tools run, across the whole agent run
+        self.refused = 0  # calls answered with BUDGET_USED_UP since the last reset
+
+    @property
+    def definitions(self) -> list[dict[str, Any]]:
+        repo = TOOL_DEFINITIONS if self.toolbox is not None else []
+        return [*repo, *(self.mcp.definitions if self.mcp is not None else [])]
+
+    def reset(self) -> None:
+        self.remaining, self.refused = self.max_calls, 0
+
+    def run(self, name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
+        """(content, is_error). Over budget, the call is answered with an error instead."""
+        if self.remaining <= 0:
+            self.refused += 1
+            return BUDGET_USED_UP, True
+        self.remaining -= 1
+        self.calls += 1
+        try:
+            if self.mcp is not None and self.mcp.handles(name):
+                return self.mcp.run(name, arguments), False
+            if self.toolbox is None:
+                raise ToolError(f"unknown tool {name!r}")
+            return self.toolbox.run(name, arguments), False
+        except ToolError as exc:
+            return f"Error: {exc}", True
 
 
 def resolve() -> tuple[str, str]:
@@ -95,21 +150,11 @@ class Claude:
         self.client = client or anthropic.Anthropic()
         self.model, self.effort = resolve()
         self.spend = Spend()
-        self.toolbox = toolbox
-        self.mcp = mcp
-        self.max_tool_calls = max_tool_calls
-        self.tool_calls = 0
+        self.tools = Tools(toolbox, mcp, max_tool_calls)
 
-    def _definitions(self) -> list[dict[str, Any]]:
-        repo = TOOL_DEFINITIONS if self.toolbox is not None else []
-        return [*repo, *(self.mcp.definitions if self.mcp is not None else [])]
-
-    def _run_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        if self.mcp is not None and self.mcp.handles(name):
-            return self.mcp.run(name, arguments)
-        if self.toolbox is None:
-            raise ToolError(f"unknown tool {name!r}")
-        return self.toolbox.run(name, arguments)
+    @property
+    def tool_calls(self) -> int:
+        return self.tools.calls
 
     def _create(self, params: dict[str, Any]) -> Any:
         import anthropic
@@ -123,23 +168,14 @@ class Claude:
         self.spend.add(response.model, response.usage)
         return response
 
-    def _tool_results(self, response: Any, budget: int) -> tuple[list[dict[str, Any]], int]:
-        """Runs each requested tool. Over budget, the call is answered with an error instead."""
+    def _tool_results(self, response: Any) -> list[dict[str, Any]]:
         results = []
         for block in response.content:
             if block.type != "tool_use":
                 continue
-            if not self._definitions():
+            if not self.tools.definitions:
                 raise LLMError(f"model called {block.name!r} but no tools were offered")
-            if budget <= 0:
-                content, is_error = "Tool budget used up. Answer now with what you have.", True
-            else:
-                budget -= 1
-                self.tool_calls += 1
-                try:
-                    content, is_error = self._run_tool(block.name, dict(block.input)), False
-                except ToolError as exc:
-                    content, is_error = f"Error: {exc}", True
+            content, is_error = self.tools.run(block.name, dict(block.input))
             results.append(
                 {
                     "type": "tool_result",
@@ -148,7 +184,7 @@ class Claude:
                     "is_error": is_error,
                 }
             )
-        return results, budget
+        return results
 
     def call(
         self, system: str, context: str, prompt: str, schema: dict[str, Any]
@@ -168,22 +204,21 @@ class Claude:
                 "format": {"type": "json_schema", "schema": schema},
             },
         }
-        if self._definitions():
-            params["tools"] = self._definitions()
+        if self.tools.definitions:
+            params["tools"] = self.tools.definitions
         if self.model in FALLBACK_MODELS:
             params |= {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
 
-        budget = self.max_tool_calls
+        self.tools.reset()
         # Each round either answers or calls tools; past the budget every call is refused, so
         # the model has to answer. The extra rounds leave room for that final answer.
-        for _ in range(self.max_tool_calls + 3):
+        for _ in range(self.tools.max_calls + 3):
             response = self._create(params)
             if response.stop_reason != "tool_use":
                 break
             # Append the content unchanged: thinking blocks must be passed back as received.
             messages.append({"role": "assistant", "content": response.content})
-            results, budget = self._tool_results(response, budget)
-            messages.append({"role": "user", "content": results})
+            messages.append({"role": "user", "content": self._tool_results(response)})
         else:
             raise LLMError("kept calling tools after the tool budget was used up")
 
