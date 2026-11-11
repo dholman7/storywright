@@ -22,8 +22,9 @@ PROFILES: dict[str, tuple[str, str]] = {
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-sonnet-5-5"}
 
 # USD per million tokens (input, output, cache write, cache read), Claude API pricing table
-# (2026-10-06). Cache writes are 1.25x input (5-minute TTL). Cache-read rates not listed there
-# assume the usual 10% of input.
+# (2026-10-06). Cache writes are 1.25x input (5-minute TTL). Cache reads are the table's rate
+# where it lists one (Opus 5.5 and Sonnet 5.5: $0.20, 5% and 10% of input) and the usual 10% of
+# input where it doesn't (Haiku 5.5).
 PRICES: dict[str, tuple[float, float, float, float]] = {
     "claude-opus-5-5": (4.00, 20.00, 5.00, 0.20),
     "claude-sonnet-5-5": (2.00, 10.00, 2.50, 0.20),
