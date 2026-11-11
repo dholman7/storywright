@@ -205,3 +205,14 @@ def test_the_system_prompt_requires_the_body_on_status_assertions_without_a_repo
 
     assert "every status assertion shows" in prompts.SYSTEM
     assert "await res.text()" in prompts.SYSTEM
+
+
+def test_a_skipped_test_fails_verification_even_when_the_suite_is_green() -> None:
+    skipped = f'test.skip("a", {{ tag: "{TAG}" }}, async () => {{ expect(1).toBe(1); }});'
+    llm = ScriptedLLM([_write(code=skipped), _repair(code=skipped.replace("test.skip(", "test("))])
+
+    final = _run(llm, [GREEN, GREEN])
+
+    assert final["verdict"] == "passing" and final["repairs"] == 1
+    assert agent_graph.SKIPPED in llm.prompts[1]  # the repair was told why
+    assert not GREEN.errors  # the verifier's own result is left alone

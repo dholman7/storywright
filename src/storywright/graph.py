@@ -18,7 +18,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from storywright import prompts
-from storywright.guards import changed_shared_code, weakening
+from storywright.guards import changed_shared_code, inventory, weakening
 from storywright.llm import LLM, LLMError
 from storywright.repo import Verification
 
@@ -63,6 +63,12 @@ def _report(v: Verification) -> str:
     if not parts:
         parts.append(f"{v.passed} passed, but no passing test carries the required tag.")
     return "\n\n".join(parts)
+
+
+# The scenario is the specification, so every test for it must run.
+SKIPPED = (
+    "a test is skipped, focused, or marked to fail (skip, fixme, fail, only); every test must run"
+)
 
 
 def build(
@@ -111,6 +117,9 @@ def build(
 
     def verify(state: State) -> State:
         result = verifier(state)
+        parsed = inventory(state["code"])
+        if parsed is not None and parsed.skips:
+            result = result.model_copy(update={"errors": [*result.errors, SKIPPED]})
         summary = f"verify: {result.passed} passed, {result.failed} failed"
         if not result.typechecks:
             summary += ", type errors"
