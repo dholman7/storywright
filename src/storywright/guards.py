@@ -427,3 +427,38 @@ def changed_shared_code(before: str, after: str) -> str | None:
                 "only additions are allowed"
             )
     return None
+
+
+# A Then-section step: "Then ...", or "And"/"But" continuing it.
+_STEP = re.compile(r"^\s*(Then|And|But)\b(.*)$")
+_QUOTED = re.compile(r'"([^"<>]+)"')
+_STATUS = re.compile(r"\bstatus(?: code)? is (\d{3})\b")
+# Comments, so a literal only mentioned in a comment doesn't count as asserted.
+_COMMENTS = re.compile(r"/\*.*?\*/|(?:^|(?<=\s))//[^\n]*", re.DOTALL | re.MULTILINE)
+
+
+def scenario_literals(story: str) -> list[str]:
+    """Quoted values and status codes in the scenario's Then steps: what it says must hold.
+
+    Only Then/And/But steps after the first Then count. Free text in the story, including
+    anything injected into it, is not a step, and placeholders (<status>) aren't literal.
+    """
+    found: list[str] = []
+    in_then = False
+    for line in story.splitlines():
+        match = _STEP.match(line)
+        if not match:
+            if line.strip().startswith(("Given", "When", "Scenario", "Examples")):
+                in_then = False
+            continue
+        keyword, rest = match.groups()
+        in_then = in_then or keyword == "Then"
+        if in_then:
+            found += _STATUS.findall(rest) + _QUOTED.findall(rest)
+    return list(dict.fromkeys(found))
+
+
+def missing_literals(story: str, code: str) -> list[str]:
+    """Then-step values the test's code never mentions outside comments."""
+    text = _COMMENTS.sub("", code)
+    return [value for value in scenario_literals(story) if value not in text]
