@@ -19,6 +19,10 @@ EXCLUDED = {
     ".ruff_cache",
     ".pytest_cache",
 }
+# Files that hold credentials, by name: never listed, read, or searched, wherever they are.
+SECRETS = re.compile(
+    r"^(\.env(\..*)?|.*\.(pem|key|p12|pfx)|id_(rsa|ed25519|ecdsa)(\.pub)?|\.npmrc|\.netrc|\.pypirc)$"
+)
 MAX_LIST = 200
 MAX_LINES = 400
 MAX_MATCHES = 60
@@ -84,13 +88,16 @@ class Toolbox:
             raise ToolError(f"{relative!r} is outside the repository")
         if any(part in EXCLUDED for part in path.relative_to(self.root).parts):
             raise ToolError(f"{relative!r} is in an excluded directory")
+        if SECRETS.match(path.name):
+            raise ToolError(f"{relative!r} may hold credentials; it can't be read")
         return path
 
     def _files(self, directory: Path, glob: str) -> list[Path]:
         found = []
         for path in sorted(directory.rglob(glob)):
             parts = path.relative_to(self.root).parts
-            if path.is_file() and not any(part in EXCLUDED for part in parts):
+            excluded = any(part in EXCLUDED for part in parts) or SECRETS.match(path.name)
+            if path.is_file() and not excluded:
                 found.append(path)
         return found
 

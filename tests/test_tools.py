@@ -143,3 +143,35 @@ def test_a_model_that_never_stops_calling_tools_is_cut_off(repo: Path) -> None:
 
     with pytest.raises(LLMError, match="kept calling tools"):
         claude.call("system", "context", "prompt", {"type": "object"})
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".env",
+        ".env.local",
+        "server.key",
+        "cert.pem",
+        "id_rsa",
+        "id_ed25519.pub",
+        ".npmrc",
+        ".netrc",
+    ],
+)
+def test_credential_files_are_never_read_listed_or_searched(repo: Path, name: str) -> None:
+    (repo / "backend" / name).write_text("VI_SECRET_KEY=AEG-SECRET-1\n")
+    tools = Toolbox(repo)
+
+    with pytest.raises(ToolError, match="may hold credentials"):
+        tools.read_file(f"backend/{name}", 1)
+    assert name not in tools.list_files("backend", "*")
+    assert "AEG-SECRET-1" not in tools.search("VI_SECRET_KEY", ".")
+
+
+@pytest.mark.parametrize(
+    "name", ["env.ts", "environment.py", "keys.ts", "monkey.py", "env.example.md"]
+)
+def test_ordinary_files_with_secret_like_names_stay_readable(repo: Path, name: str) -> None:
+    (repo / "backend" / name).write_text("ok\n")
+
+    assert "1: ok" in Toolbox(repo).read_file(f"backend/{name}", 1)
