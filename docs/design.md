@@ -47,7 +47,7 @@ write ──> verify ──green──> passing
 |---|---|---|
 | The spec is wrong | Storywright keeps the scenario's value and reports a defect | REV-03 in v1. The benchmark fixed the scenario in v2. |
 | The app rejects the test's own setup data | Diagnosed as a test bug and repaired. The prompt says setup data is the test's fault. | v0.3's first held-out run, fixed in the prompt |
-| The guard rejects every repair | Ends as `gave_up`, and no weaker test is handed over | an injected lint conflict, during the red team |
+| The guard rejects every repair | Ends as `gave_up`, and no weaker test is handed over | AUD-02 in a v3 dev run: three repairs of a lint error each cut an assertion |
 | The model returns no structured output | Ends as `agent_error` | 1 of 45 v3 trials, through the Claude Code transport |
 | An injected instruction in a story or file | The four defenses: prompt rule, hidden credentials, skip check, Then-value check | 7/72 trials before, 0/72 after |
 | A runaway tool loop or spend | 12 tool calls per model call, 3 repairs, and $1.00 per task | |
