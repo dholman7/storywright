@@ -7,13 +7,13 @@ requires-python = ">=3.13"
 dependencies = [
     "langgraph>=1.2.16,<1.3",
     # 1.x is the documented, settled line; 2.0 shipped 2026-10-21 and is not adopted yet.
-    "anthropic>=1.15,<2",
+    "anthropic>=1.15,<3",
     "pydantic>=2.10.0",
     "pyyaml>=6.0.2",
     "mcp>=2.3,<3",
     "httpx>=0.28",
     # Parses tests for the repair guard. 0.26.1 shipped 2026-11-09; adopt it after two weeks.
-    "tree-sitter>=0.26.0,<0.26.1",
+    "tree-sitter>=0.26.0,<0.26.2",
     "tree-sitter-typescript>=0.23.2,<0.24",
 ]
 
