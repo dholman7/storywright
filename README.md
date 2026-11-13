@@ -4,7 +4,25 @@ An agent that turns a user story into Playwright tests, API or UI, that follow t
 
 ## Results
 
-Scored by [agent-eval-gate](https://github.com/dholman7/agent-eval-gate) on its vendor-intake benchmark. Claude Haiku 5.5 at low effort, **3 trials per task** on the 20 held-out tasks:
+**On a blind benchmark** (agent-eval-gate [v3](https://github.com/dholman7/agent-eval-gate#blind-benchmark-v3)): 15 held-out tasks written and frozen before any agent ran on them, 3 trials each, run once.
+
+| Agent | Trials succeeded | Seeded bugs caught | Failing on correct code | Cost per trial* |
+|---|---|---|---|---|
+| **Storywright, Opus 5.5** | **100%** (45/45) | **95%** (108/114) | 0% | $0.093 |
+| Claude Code (as the agent), Haiku 5.5 | 100% (45/45) | 89% (102/114) | 0% | $0.010 |
+| **Storywright, Haiku 5.5** | **98%** (44/45) | **86%** (98/114) | 0% | $0.003 |
+| One Claude call, Haiku 5.5 | 16% (7/45) | 7% (8/114) | 83% | $0.002 |
+
+\* Billed to a Claude subscription through headless Claude Code; list-price estimates, so higher than the API-billed costs below.
+
+Paired by task:
+
+- **On Haiku, Storywright and a general coding agent are level** (bugs caught differ by 5 points, p = 0.25), and Storywright costs about a third as much.
+- **Opus catches 10 more points than Haiku,** but with 15 tasks that isn't significant (p = 0.125).
+
+[ADR 0003](docs/adr/0003-a-graph-not-a-coding-agent.md) is what that means for the design.
+
+**Earlier, on the v1 and v2 held-out split** (not blind: the history below says why). Claude Haiku 5.5 at low effort, **3 trials per task** on the 20 held-out tasks:
 
 | Agent | Trials succeeded | All 3 trials succeed | Seeded bugs caught | Failing on correct code | Cost per trial |
 |---|---|---|---|---|---|
